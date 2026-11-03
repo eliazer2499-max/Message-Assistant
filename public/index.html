@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b6e4f">
+<title>Message Assistant</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="login" class="screen hidden">
+  <div class="card narrow">
+    <h1>Message Assistant</h1>
+    <p class="muted">Admin sign-in</p>
+    <div class="tabs" id="loginTabs"><button data-t="phone" class="on">Phone code</button><button data-t="password">Password</button></div>
+    <form id="fPhone">
+      <label>Admin phone number<input id="lPhone" type="tel" autocomplete="tel" placeholder="+1 646 555 0100" required></label>
+      <button class="primary" type="submit">Text me a code</button>
+    </form>
+    <form id="fCode" class="hidden">
+      <label>6-digit code<input id="lCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" required></label>
+      <button class="primary" type="submit">Sign in</button>
+      <button type="button" class="link" id="codeBack">Use another number</button>
+    </form>
+    <form id="fPass" class="hidden">
+      <label>Username<input id="lUser" autocomplete="username" value="admin" required></label>
+      <label>Password<input id="lPass" type="password" autocomplete="current-password" required></label>
+      <button class="primary" type="submit">Sign in</button>
+    </form>
+    <p id="loginMsg" class="msg"></p>
+  </div>
+</div>
+
+<div id="app" class="screen hidden">
+  <header><span id="brand">Message Assistant</span><span id="connDot" class="dot"></span><button id="logout" class="link">Sign out</button></header>
+  <div id="banner" class="banner hidden"></div>
+  <main>
+    <section id="v-home" class="view">
+      <div class="card" id="homeConn"></div>
+      <div class="card"><h2>Alerts <button class="link small" id="clearAlerts">Clear all</button></h2><div id="alerts"></div></div>
+      <div class="grid3" id="homeCounts"></div>
+      <div class="card"><h2>AI keys</h2><div id="homeKeys" class="chips"></div></div>
+      <div class="card"><h2>Right now</h2><div id="homeQueue"></div></div>
+    </section>
+
+    <section id="v-people" class="view hidden">
+      <div class="tabs" id="peopleTabs"><button data-s="pending" class="on">Waiting</button><button data-s="approved">Approved</button><button data-s="blocked">Blocked</button><button data-s="">All</button></div>
+      <div id="people"></div>
+    </section>
+
+    <section id="v-connect" class="view hidden">
+      <div class="card">
+        <h2>Google Messages</h2>
+        <p id="cState" class="state"></p>
+        <ol class="steps muted">
+          <li>On the phone with RCS: open Google Messages → profile picture → <b>Device pairing</b>.</li>
+          <li>Below, the server's own browser is shown live. Tap <b>Sign in</b> and sign in with the Google account of that phone (tap a box, then type in the box under the picture).</li>
+          <li>Scan the QR code (or confirm on the phone) when it appears.</li>
+          <li>When the chats list shows, it is connected. It stays paired after restarts.</li>
+        </ol>
+      </div>
+      <div class="card" id="qrCard"><h2>QR code</h2><img id="qrImg" alt="QR code"></div>
+      <div class="card">
+        <div class="screenwrap"><img id="screen" alt="The server's browser (tap to click)"><p id="screenNote" class="muted small">Loading the picture…</p></div>
+        <div class="row"><input id="typeText" placeholder="Type here, then Send keys" autocomplete="off"><button id="typeBtn">Send keys</button></div>
+        <div class="row wrap">
+          <button data-key="Enter">Enter</button><button data-key="Tab">Tab</button><button data-key="Backspace">⌫</button><button data-key="Escape">Esc</button>
+          <button data-act="scrollDown">Scroll ↓</button><button data-act="scrollUp">Scroll ↑</button><button data-act="back">Back</button><button data-act="reload">Reload</button>
+          <button data-act="messages">Go to Messages</button><button data-act="signin">Sign-in page</button>
+        </div>
+        <div class="row wrap"><button id="gmRestart">Restart browser</button><button id="gmSignout" class="danger">Unpair &amp; sign out</button></div>
+        <p class="muted small">What you type here goes straight to the browser and is never saved or logged.</p>
+      </div>
+    </section>
+
+    <section id="v-keys" class="view hidden">
+      <div class="card">
+        <h2>AI keys <button class="link small" id="addKeyBtn">+ Add key</button></h2>
+        <p class="muted small">Tried top to bottom. A key that hits its limit rests and comes back by itself; the next key answers meanwhile. Add as many free keys as you like.</p>
+        <div id="keys"></div>
+      </div>
+      <div class="card hidden" id="keyForm">
+        <h2 id="kfTitle">Add a key</h2>
+        <label>Provider<select id="kfPreset"></select></label>
+        <p id="kfHelp" class="muted small"></p>
+        <label>Name<input id="kfName" placeholder="e.g. Groq 3"></label>
+        <label id="kfAcctL">Account ID<input id="kfAcct" placeholder="32 letters/numbers"></label>
+        <label id="kfBaseL">Base URL<input id="kfBase" placeholder="https://…/v1"></label>
+        <label id="kfModelL">Model<input id="kfModel"></label>
+        <label>Key<input id="kfKey" type="password" autocomplete="off" placeholder="paste the key"></label>
+        <label class="check"><input type="checkbox" id="kfActive" checked> Active</label>
+        <div class="row"><button class="primary" id="kfSave">Save</button><button id="kfCancel">Cancel</button></div>
+        <p id="kfMsg" class="msg"></p>
+      </div>
+    </section>
+
+    <section id="v-settings" class="view hidden">
+      <div class="card" id="setForm">
+        <h2>Settings</h2>
+        <label>Assistant name<input data-s="assistant_name"></label>
+        <label>Admin phone number(s), comma separated<input id="adminPhones" placeholder="+1 646 555 0100"></label>
+        <label>Timezone<input data-s="timezone" placeholder="America/New_York"></label>
+        <label>"Waiting for approval" reply<textarea data-s="waiting_text" rows="3"></textarea></label>
+        <label>Welcome text (after approval; {name} = assistant name)<textarea data-s="welcome_text" rows="3"></textarea></label>
+        <label>"Busy" text (all AI keys resting)<input data-s="busy_text"></label>
+        <label>Messages per person per day (0 = no limit)<input data-s="daily_limit" inputmode="numeric"></label>
+        <label>Messages thinking at the same time<input data-s="max_parallel" inputmode="numeric"></label>
+        <label>AI steps per message<input data-s="max_steps" inputmode="numeric"></label>
+        <label>Gemini model (blank = default)<input data-s="model"></label>
+        <label class="check"><input type="checkbox" data-s="browser_enabled"> Web browser for the assistant</label>
+        <label>Browser time per message (seconds)<input data-s="browser_job_seconds" inputmode="numeric"></label>
+        <label>Alert address (optional, free: https://ntfy.sh/your-secret-topic)<input data-s="alert_webhook" placeholder="https://ntfy.sh/…"></label>
+        <div class="row"><button class="primary" id="saveSettings">Save</button><button id="backupBtn">Back up now</button></div>
+        <p id="setMsg" class="msg"></p>
+      </div>
+      <div class="card">
+        <h2>Admin password</h2>
+        <label>Username<input id="pwUser" autocomplete="username"></label>
+        <label>Current password<input id="pwCur" type="password" autocomplete="current-password"></label>
+        <label>New password (8+ characters)<input id="pwNew" type="password" autocomplete="new-password"></label>
+        <button id="pwSave">Change password</button>
+        <p id="pwMsg" class="msg"></p>
+      </div>
+      <div class="card"><h2>Activity</h2><div id="activity" class="activity"></div></div>
+      <p class="muted small center" id="ver"></p>
+    </section>
+  </main>
+  <nav id="nav">
+    <button data-v="home" class="on">🏠<span>Home</span></button>
+    <button data-v="people">👥<span>People</span><b id="pendBadge" class="badge hidden"></b></button>
+    <button data-v="connect">📱<span>Connect</span></button>
+    <button data-v="keys">🔑<span>AI keys</span></button>
+    <button data-v="settings">⚙️<span>Settings</span></button>
+  </nav>
+</div>
+
+<div id="sheet" class="sheet hidden"><div class="sheetbody"><button class="link close" id="sheetClose">Close ✕</button><div id="sheetContent"></div></div></div>
+<script src="app.js"></script>
+</body>
+</html>
