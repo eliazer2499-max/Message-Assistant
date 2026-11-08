@@ -81,7 +81,8 @@ Assistant name, admin phone(s), timezone, the waiting / welcome / busy texts, me
 sudo messageassistant status          # service + Messages state + people + keys
 sudo messageassistant logs            # last 100 log lines
 sudo messageassistant restart
-sudo messageassistant update          # backs up the database, installs the newest release
+sudo messageassistant update          # check now; backs up the database, installs a newer release (rolls back if it fails)
+sudo messageassistant version         # installed version and the last update check
 sudo messageassistant backup          # a copy in /var/lib/messageassistant/backups
 sudo messageassistant users           # list; approve|block|remove <#>
 sudo messageassistant keys            # AI keys (masked) and their status
@@ -89,6 +90,22 @@ sudo messageassistant admin-phone +1…
 sudo messageassistant reset-password
 sudo messageassistant uninstall       # keeps data; add --purge to delete it
 ```
+
+## Updates (only when you ask)
+
+Nothing updates by itself. Press **Update now** in Dashboard → Settings → Updates, or type `sudo messageassistant update`. It:
+
+1. reads `docs/version.json` in this repo and stops if there is no **newer** version (it never goes back to an older one);
+2. downloads `docs/messageassistant-<version>.tar.gz` and checks its `.sha256`;
+3. backs up the database (`/var/lib/messageassistant/backups/pre-update-…db`);
+4. installs it in `/opt/messageassistant/releases/<version>` and switches `current` to it;
+5. restarts and checks `/healthz`; if the new version does not answer within a minute, it switches back to the previous release by itself.
+
+It never changes `/etc/messageassistant/env`, the Caddy files or your data, and it repairs the service file if `ExecStart` was changed by hand.
+Dashboard → **Settings → Updates** shows this server's version and the latest, with **Update now** and **Check again**.
+Logs: `sudo messageassistant logs` (or `journalctl -u messageassistant-update`).
+
+From 1.0.0: type `sudo messageassistant update` once; after that you can update from the dashboard. See CHANGELOG.md.
 
 ## Backup and restore
 

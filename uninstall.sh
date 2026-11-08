@@ -4,7 +4,8 @@
 set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "Run with sudo"; exit 1; }
 PURGE="${1:-}"
-systemctl disable --now messageassistant >/dev/null 2>&1 || true
+systemctl disable --now messageassistant messageassistant-update.timer messageassistant-update.path >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/messageassistant-update.service /etc/systemd/system/messageassistant-update.timer /etc/systemd/system/messageassistant-update.path
 rm -f /etc/systemd/system/messageassistant.service /usr/local/sbin/messageassistant-update /etc/systemd/system/caddy.service.d/messageassistant.conf
 rm -f /etc/caddy/messageassistant.caddy /usr/local/sbin/messageassistant-caddy-import
 if [ -f /etc/caddy/Caddyfile ]; then sed -i '/^# Message Assistant$/d;/^import \/etc\/caddy\/messageassistant.caddy$/d' /etc/caddy/Caddyfile; fi

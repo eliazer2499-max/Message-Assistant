@@ -4,7 +4,7 @@ import { openDb, all, get, setting, setSetting, audit } from './db.js';
 import { loadMasterKey } from './crypto.js';
 import * as aikeys from './aikeys.js';
 import * as users from './users.js';
-import { setPassword, randomPassword } from './adminauth.js';
+import { setPassword, randomPassword, hasPassword } from './adminauth.js';
 
 loadMasterKey(cfg.dataDir); openDb();
 const [cmd, ...args] = process.argv.slice(2);
@@ -48,6 +48,7 @@ switch (cmd) {
     ks.forEach((k, i) => out(`${i + 1}. ${k.name}  [${k.status}${k.resting_until_text ? ' until ' + k.resting_until_text : ''}]  ${k.kind_label}  ${k.effective_model || ''}  key ${k.masked || '-'}`));
     break;
   }
+  case 'has-password': { out(hasPassword() ? 'yes' : 'no'); break; }
   case 'info': {
     out(`Message Assistant ${VERSION}`);
     out(`Google Messages: ${setting('gm_state')}`);

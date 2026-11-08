@@ -202,7 +202,36 @@ async function loadSettings() {
   const a = await GET('/api/activity');
   $('#activity').innerHTML = a.items.map(x => `<div><span class="muted">${when(x.ts)}</span> <b>${esc(x.action)}</b> ${esc(x.detail)}</div>`).join('');
   const me = await GET('/api/me'); $('#ver').textContent = 'Message Assistant ' + me.version;
+  loadUpdates();
 }
+// ---------------- updates (1.0.1) ----------------
+function showUpdates(u) {
+  const latest = u.latest ? u.latest : '(could not check' + (u.check_error ? ': ' + u.check_error : '') + ')';
+  $('#updVer').textContent = `This server: ${u.current} · Latest: ${latest}` + (u.update_available ? ' · update available' : (u.latest ? ' · up to date' : ''));
+  if ($('#updAuto')) $('#updAuto').checked = !!u.auto;
+  $('#updNow').disabled = !!u.pending;
+  const l = u.last;
+  $('#updLast').textContent = u.pending ? 'An update is starting…' : (l && l.at ? `Last update check: ${when(Date.parse(l.at))} — ${l.message || l.result}` : '');
+}
+async function loadUpdates(fresh) {
+  try { showUpdates(fresh ? await POST('/api/update/check') : await GET('/api/update')); } catch (er) { msg($('#updMsg'), er.message); }
+}
+if ($('#updAuto')) $('#updAuto').onchange = async () => {
+  try { showUpdates(await POST('/api/update/auto', { on: $('#updAuto').checked })); msg($('#updMsg'), $('#updAuto').checked ? 'Auto-update is on.' : 'Auto-update is off.', true); }
+  catch (er) { msg($('#updMsg'), er.message); }
+};
+$('#updCheck').onclick = () => loadUpdates(true);
+$('#updNow').onclick = async () => {
+  if (!confirm('Update now? The assistant restarts for about a minute.')) return;
+  try {
+    const r = await POST('/api/update/now'); msg($('#updMsg'), r.words, true); $('#updNow').disabled = true;
+    const was = (await GET('/api/update')).current; let n = 0;
+    const t = setInterval(async () => {
+      n++; try { const u = await GET('/api/update'); if (!u.pending || u.current !== was || n > 60) { clearInterval(t); showUpdates(u); if (u.current !== was) msg($('#updMsg'), 'Updated to ' + u.current + '.', true); } } catch {}
+    }, 5000);
+  } catch (er) { msg($('#updMsg'), er.message); }
+};
+
 $('#saveSettings').onclick = async () => {
   const b = { admin_phones: $('#adminPhones').value };
   $$('[data-s]', $('#setForm')).forEach(i => { b[i.dataset.s] = i.type === 'checkbox' ? (i.checked ? '1' : '0') : i.value; });

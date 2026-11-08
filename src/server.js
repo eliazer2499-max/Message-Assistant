@@ -16,6 +16,7 @@ import { pending as outboxPending, recent as outboxRecent } from './outbox.js';
 import * as B from './browser.js';
 import { startApp, channel as appChannel, STATE_WORDS } from './app.js';
 import { backup } from './scheduler.js';
+import * as upd from './updates.js';
 
 let CH = null;
 const PUBLIC = path.join(APP_DIR, 'public');
@@ -121,6 +122,11 @@ on('POST', /^\/api\/password$/, async (req, { b }) => {
   return { ok: true, signed_out: true };
 });
 on('POST', /^\/api\/backup$/, async () => ({ file: path.basename(backup('manual')) }));
+// ---------- updates (1.0.1) ----------
+on('GET', /^\/api\/update$/, async () => upd.info());
+on('POST', /^\/api\/update\/auto$/, async (req, { b }) => { const on = !!b.on; upd.setAuto(on); audit('admin', 'update.auto', on ? 'on' : 'off'); return upd.info(); });
+on('POST', /^\/api\/update\/check$/, async () => upd.info({ fresh: true }));
+on('POST', /^\/api\/update\/now$/, async () => { upd.requestNow(); audit('admin', 'update.now', ''); return { ok: true, words: 'Update started. The dashboard reloads by itself in a minute or two.' }; });
 
 // ---------- Google Messages connection (live view) ----------
 on('GET', /^\/api\/messages\/status$/, async () => messagesStatus());
@@ -179,7 +185,14 @@ export async function main({ channel = null, port = cfg.port, host = cfg.host } 
   return { server: srv, port: srv.address().port, channel: CH, stop };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(APP_DIR, 'src', 'server.js')) {
+// 1.0.1: started through the /opt/messageassistant/current symlink, argv[1] and APP_DIR differ as strings
+// (APP_DIR is the real releases/<version> path), so compare real paths. 1.0.0 compared plain paths and never started.
+function isEntry() {
+  if (!process.argv[1]) return false;
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+  return real(process.argv[1]) === real(path.join(APP_DIR, 'src', 'server.js'));
+}
+if (isEntry()) {
   const s = await main();
   for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, async () => { log('http', 'stopping'); await s.stop().catch(() => {}); process.exit(0); });
 }
