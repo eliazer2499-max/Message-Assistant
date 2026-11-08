@@ -44,7 +44,7 @@ test('the server starts when run through a symlinked current/ folder (1.0.0 rest
 
 test('Settings → Updates: current/latest, Auto-update switch (default on), Update now', async () => {
   const src = http.createServer((req, res) => {
-    if (req.url === '/docs/version.json') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end('{"version":"9.9.9","date":"2026-11-05"}'); }
+    if (req.url.split('?')[0] === '/docs/version.json') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end('{"version":"9.9.9","date":"2026-11-05"}'); }
     res.writeHead(404); res.end();
   });
   await new Promise(r => src.listen(0, '127.0.0.1', r));

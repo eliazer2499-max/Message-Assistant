@@ -102,8 +102,22 @@ switch (cmd) {
     const upd = await import('./updates.js');
     const i = await upd.info({ fresh: true });
     out(`Installed: ${i.current}`);
+    out(`Update source: ${(i.sources || []).join('  →  ')}`);
     out(i.latest ? `Available: ${i.latest}${i.update_available ? '  → install with: sudo messageassistant update' : '  (up to date)'}` : `Available: could not check (${i.check_error})`);
     if (i.update_available && i.notes) out('What\'s new:\n' + i.notes);
+    break;
+  }
+  case 'update-source': {   // 1.0.3: show | set <url> | reset (the root updater reads the same saved address)
+    const upd = await import('./updates.js');
+    const sub = (args[0] || 'show').toLowerCase();
+    try {
+      if (sub === 'set') { if (!args[1]) throw new Error('Usage: sudo messageassistant update-source set https://…'); const v = upd.setSource(args[1]); out(v ? `Update source saved: ${v}` : 'That is the default; using the default.'); }
+      else if (sub === 'reset') { upd.resetSource(); out('Update source reset to the default.'); }
+      else if (sub !== 'show') throw new Error('Usage: sudo messageassistant update-source show|set <url>|reset');
+    } catch (e) { out('Not changed: ' + e.message); process.exit(1); }
+    const s = upd.sourceInfo();
+    out(`Update source: ${s.source || s.source_default + ' (default)'}`);
+    out('Tried in this order: ' + s.sources.join('  →  '));
     break;
   }
   case 'has-password': { out(hasPassword() ? 'yes' : 'no'); break; }
@@ -116,6 +130,6 @@ switch (cmd) {
     break;
   }
   default:
-    out('Usage: messageassistant-cli {reset-password [new] | admin-phone [+1…] | users [pending|approved|blocked] | approve|block|remove <#|phone> | keys | info | sites | sites-approval on|off|show | sites-access all|chosen|off | sites-allow|sites-deny <#> | sites-limits [MB] [sites] | sites-unpublish <#|name> | portal on|off|show | check-update}');
+    out('Usage: messageassistant-cli {reset-password [new] | admin-phone [+1…] | users [pending|approved|blocked] | approve|block|remove <#|phone> | keys | info | sites | sites-approval on|off|show | sites-access all|chosen|off | sites-allow|sites-deny <#> | sites-limits [MB] [sites] | sites-unpublish <#|name> | portal on|off|show | check-update | update-source show|set <url>|reset}');
     process.exit(cmd ? 1 : 0);
 }

@@ -5,15 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b6e4f">
 <title>Message Assistant</title>
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="icon.svg">
-<link rel="apple-touch-icon" href="icon-192.png">
-<link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.webmanifest?v=__V__">
+<link rel="icon" type="image/svg+xml" href="icon.svg?v=__V__">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=__V__">
+<link rel="apple-touch-icon" href="icon-192.png?v=__V__">
+<link rel="stylesheet" href="style.css?v=__V__">
 </head>
 <body>
 <div id="login" class="screen hidden">
   <div class="card narrow">
-    <img src="icon.svg" class="logo big" alt="">
+    <img src="icon.svg?v=__V__" class="logo big" width="72" height="72" alt="">
     <h1>Message Assistant</h1>
     <p class="muted">Admin sign-in</p>
     <div class="tabs" id="loginTabs"><button data-t="phone" class="on">Phone code</button><button data-t="password">Password</button></div>
@@ -36,7 +37,7 @@
 </div>
 
 <div id="app" class="screen hidden">
-  <header><img src="icon.svg" class="logo" alt=""><span id="brand">Message Assistant</span><span id="connDot" class="dot"></span><button id="logout" class="link">Sign out</button></header>
+  <header><img src="icon.svg?v=__V__" class="logo" width="28" height="28" alt=""><span id="brand">Message Assistant</span><span id="connDot" class="dot"></span><button id="logout" class="link">Sign out</button></header>
   <div id="banner" class="banner hidden"></div>
   <main>
     <section id="v-home" class="view">
@@ -136,13 +137,24 @@
       </div>
       <div class="card" id="updCard">
         <h2>Updates</h2>
-        <p id="updVer" class="muted">Checking…</p>
+        <p id="updVer" class="updstat">Not checked yet</p>
+        <p id="updSub" class="muted small"></p>
+        <div class="row"><button class="primary" id="updNow">Update now</button><button id="updCheck">Check now</button></div>
         <p class="muted small">Updates install only when you press Update now. Only newer versions; it goes back by itself if the new one does not start.</p>
-        <div class="row"><button class="primary" id="updNow">Update now</button><button id="updCheck">Check again</button></div>
         <p id="updLast" class="muted small"></p>
         <div id="updNotes" class="notes hidden"></div>
         <pre id="updLog" class="log hidden"></pre>
         <p id="updMsg" class="msg"></p>
+      </div>
+      <div class="card" id="usrcCard">
+        <h2>Update source</h2>
+        <label>Get updates from<select id="usrc"><option value="default">GitHub (default)</option><option value="custom">Another address</option></select></label>
+        <div id="usrcBox"><label>Address<input id="usrcLink" placeholder="https://updates.example.com/docs" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="url"></label>
+          <p class="muted small">A folder with version.json and messageassistant-latest.tar.gz (+ .sha256). A GitHub repo link works too: its /docs folder is used. https only.</p></div>
+        <p class="muted small">Tried in this order. If one can't be reached, the next is used. Every download is checked with its .sha256 before installing.</p>
+        <ol id="usrcOrder" class="muted small srcorder"></ol>
+        <div class="row"><button class="primary" id="usrcSave">Save</button><button id="usrcReset">Reset to default</button></div>
+        <p id="usrcMsg" class="msg"></p>
       </div>
       <div class="card">
         <h2>Admin password</h2>
@@ -167,6 +179,6 @@
 </div>
 
 <div id="sheet" class="sheet hidden"><div class="sheetbody"><button class="link close" id="sheetClose">Close ✕</button><div id="sheetContent"></div></div></div>
-<script src="app.js"></script>
+<script src="app.js?v=__V__"></script>
 </body>
 </html>

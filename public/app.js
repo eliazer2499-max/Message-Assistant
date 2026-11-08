@@ -2,6 +2,14 @@
 'use strict';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+// 1.0.3: the version this page was served as (the server fills it in). When the server runs a newer one (after
+// Update now), the page reloads once by itself, so a phone never keeps an old page, style or logo.
+const PAGE_V = '__V__';
+function reloadIfNewVersion(v) {
+  if (!v || PAGE_V.startsWith('__') || v === PAGE_V) return false;
+  try { const k = 'msa-reloaded-' + v; if (sessionStorage.getItem(k)) return false; sessionStorage.setItem(k, '1'); } catch {}
+  location.reload(); return true;
+}
 let CSRF = '', VIEW = 'home', screenTimer = null, overviewTimer = null, peopleStatus = 'pending', KEYS = [], PRESETS = [], editingKey = null;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ago = (t) => { if (!t) return 'never'; const s = Math.round((Date.now() - t) / 1000); if (s < 60) return 'just now'; if (s < 3600) return Math.round(s / 60) + ' min ago'; if (s < 86400) return Math.round(s / 3600) + ' h ago'; return new Date(t).toLocaleDateString(); };
@@ -9,8 +17,13 @@ const when = (t) => t ? new Date(t).toLocaleString([], { dateStyle: 'short', tim
 function el(html) { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstChild; }
 function msg(node, text, ok = false) { node.textContent = text || ''; node.className = 'msg ' + (text ? (ok ? 'ok' : 'err') : ''); }
 
-async function api(method, path, body) {
-  const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json', ...(CSRF ? { 'X-CSRF-Token': CSRF } : {}) }, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' });
+async function api(method, path, body, ms = 0) {
+  // 1.0.3: an optional time limit, so a slow answer can never leave the page waiting forever
+  const ac = ms ? new AbortController() : null, tm = ms ? setTimeout(() => ac.abort(), ms) : null;
+  let r;
+  try { r = await fetch(path, { method, signal: ac ? ac.signal : undefined, headers: { 'Content-Type': 'application/json', ...(CSRF ? { 'X-CSRF-Token': CSRF } : {}) }, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' }); }
+  catch (e) { if (e.name === 'AbortError') { const t = new Error('No answer in ' + Math.round(ms / 1000) + ' seconds'); t.timeout = true; throw t; } throw e; }
+  finally { clearTimeout(tm); }
   if (r.status === 401 && !path.startsWith('/api/login')) { showLogin(); throw new Error('Please sign in'); }
   const ct = r.headers.get('content-type') || '';
   const data = ct.includes('json') ? await r.json() : null;
@@ -51,6 +64,7 @@ const STATE_CLASS = { connected: 'ok', phone_offline: 'warn', pairing: 'warn', s
 // ---------------- home ----------------
 async function refreshOverview() {
   let o; try { o = await GET('/api/overview'); } catch { return; }
+  if (reloadIfNewVersion(o.version)) return;
   const m = o.messages, cls = STATE_CLASS[m.state] || '';
   $('#connDot').className = 'dot ' + (cls === 'ok' ? 'ok' : cls === 'bad' ? 'bad' : 'warn');
   const down = m.state !== 'connected';
@@ -232,40 +246,76 @@ $('#sSave').onclick = async () => {
 
 // ---------------- settings ----------------
 async function loadSettings() {
-  const d = await GET('/api/settings');
-  $$('[data-s]', $('#setForm')).forEach(i => { const v = d.settings[i.dataset.s] ?? ''; if (i.type === 'checkbox') i.checked = v === '1'; else i.value = v; });
-  $('#adminPhones').value = d.admin_phones.join(', '); if (d.portal_url) $('#portalUrl').textContent = d.portal_url; $('#pwUser').value = d.admin_username || 'admin';
-  const a = await GET('/api/activity');
-  $('#activity').innerHTML = a.items.map(x => `<div><span class="muted">${when(x.ts)}</span> <b>${esc(x.action)}</b> ${esc(x.detail)}</div>`).join('');
-  const me = await GET('/api/me'); $('#ver').textContent = 'Message Assistant ' + me.version;
-  loadUpdates();
+  checkUpdates(false);   // 1.0.3: first and on its own (before, a slow or failed part above it left "Checking…" forever)
+  try {
+    const d = await GET('/api/settings');
+    $$('[data-s]', $('#setForm')).forEach(i => { const v = d.settings[i.dataset.s] ?? ''; if (i.type === 'checkbox') i.checked = v === '1'; else i.value = v; });
+    $('#adminPhones').value = d.admin_phones.join(', '); if (d.portal_url) $('#portalUrl').textContent = d.portal_url; $('#pwUser').value = d.admin_username || 'admin';
+  } catch (er) { msg($('#setMsg'), er.message); }
+  try {
+    const a = await GET('/api/activity');
+    $('#activity').innerHTML = a.items.map(x => `<div><span class="muted">${when(x.ts)}</span> <b>${esc(x.action)}</b> ${esc(x.detail)}</div>`).join('');
+  } catch {}
+  try { const me = await GET('/api/me'); $('#ver').textContent = 'Message Assistant ' + me.version; reloadIfNewVersion(me.version); } catch {}
 }
-// ---------------- updates (1.0.1) ----------------
+// ---------------- updates (1.0.1; 1.0.3: a check always ends, editable update source) ----------------
+const CHECK_LIMIT_MS = 15000;
+let updBusy = false, srcEditing = false;
+function updLine(text, cls) { const p = $('#updVer'); p.textContent = text; p.className = 'updstat ' + (cls || ''); }
+const srcLabel = (s) => String(s || '').replace(/^https?:\/\//, '');
+function showSource(u) {
+  if (!u || !u.source_default) return;
+  $('#usrc').options[0].textContent = srcLabel(u.source_default) + ' (default)';
+  if (!srcEditing) { $('#usrc').value = u.source ? 'custom' : 'default'; $('#usrcLink').value = u.source || ''; }
+  $('#usrcBox').classList.toggle('hidden', $('#usrc').value !== 'custom');
+  $('#usrcOrder').innerHTML = (u.sources || []).map((s, i) => `<li>${esc(srcLabel(s))}${i === 0 ? ' <span class="muted">— first</span>' : ''}</li>`).join('');
+}
 function showUpdates(u) {
-  const latest = u.latest ? u.latest : '(could not check' + (u.check_error ? ': ' + u.check_error : '') + ')';
-  $('#updVer').textContent = `This server: ${u.current} · Latest: ${latest}` + (u.update_available ? ' · update available' : (u.latest ? ' · up to date' : ''));
+  const state = u.state || (u.update_available ? 'available' : u.latest ? 'up_to_date' : 'error');
+  const words = u.words || (state === 'available' ? `${u.latest} available — Update now` : state === 'up_to_date' ? `Up to date (${u.current})` : 'Couldn\'t reach the update source');
+  updLine(words, state === 'available' ? 'new' : state === 'up_to_date' ? 'ok' : 'err');
+  $('#updSub').textContent = `This server: ${u.current}` + (u.checked_at ? ` · checked ${when(u.checked_at)}` : '') + (u.checked_from ? ` from ${u.checked_from}` : '') + (state === 'error' && (u.detail || u.check_error) ? ` · ${u.detail || u.check_error}` : '');
   if ($('#updAuto')) $('#updAuto').checked = !!u.auto;
-  $('#updNow').disabled = !!u.pending;
+  $('#updNow').disabled = !!u.pending || state === 'up_to_date';
   $('#updNotes').classList.toggle('hidden', !(u.update_available && u.notes));
   $('#updNotes').textContent = u.update_available && u.notes ? 'What\'s new in ' + u.latest + ':\n' + u.notes : '';
   const l = u.last;
-  $('#updLast').textContent = u.pending ? 'An update is starting…' : (l && l.at ? `Last update check: ${when(Date.parse(l.at))} — ${l.message || l.result}` : '');
+  $('#updLast').textContent = u.pending ? 'An update is running…'
+    : u.stuck ? 'Update now did not start on the server. On the server type: sudo messageassistant update'
+    : (l && l.at && l.result !== 'up_to_date' ? `Last update: ${when(Date.parse(l.at))} — ${l.message || l.result}` : '');
+  showSource(u);
 }
-async function loadUpdates(fresh) {
-  try { showUpdates(fresh ? await POST('/api/update/check') : await GET('/api/update')); } catch (er) { msg($('#updMsg'), er.message); }
+async function checkUpdates(fresh) {
+  if (updBusy) return; updBusy = true;
+  updLine('Checking…', 'busy'); $('#updCheck').disabled = true;
+  try { showUpdates(fresh ? await api('POST', '/api/update/check', {}, CHECK_LIMIT_MS) : await api('GET', '/api/update', undefined, CHECK_LIMIT_MS)); }
+  catch (er) { updLine('Couldn\'t reach the update source', 'err'); $('#updSub').textContent = er.timeout ? 'No answer in 15 seconds. Try again in a minute.' : er.message; }
+  finally { updBusy = false; $('#updCheck').disabled = false; }
 }
 if ($('#updAuto')) $('#updAuto').onchange = async () => {
   try { showUpdates(await POST('/api/update/auto', { on: $('#updAuto').checked })); msg($('#updMsg'), $('#updAuto').checked ? 'Auto-update is on.' : 'Auto-update is off.', true); }
   catch (er) { msg($('#updMsg'), er.message); }
 };
-$('#updCheck').onclick = () => loadUpdates(true);
+$('#updCheck').onclick = () => checkUpdates(true);
+$('#usrc').onchange = () => { srcEditing = true; $('#usrcBox').classList.toggle('hidden', $('#usrc').value !== 'custom'); if ($('#usrc').value === 'custom') $('#usrcLink').focus(); };
+$('#usrcLink').oninput = () => { srcEditing = true; };
+$('#usrcSave').onclick = async () => {
+  try {
+    const r = $('#usrc').value === 'default' ? await POST('/api/update/source/reset') : await POST('/api/update/source', { url: $('#usrcLink').value });
+    srcEditing = false; showSource(r); msg($('#usrcMsg'), r.source ? 'Saved.' : 'Saved: using the default.', true); checkUpdates(true);
+  } catch (er) { msg($('#usrcMsg'), er.message); }
+};
+$('#usrcReset').onclick = async () => {
+  try { const r = await POST('/api/update/source/reset'); srcEditing = false; showSource(r); msg($('#usrcMsg'), 'Back to the default.', true); checkUpdates(true); }
+  catch (er) { msg($('#usrcMsg'), er.message); }
+};
 $('#updNow').onclick = async () => {
   if (!confirm('Update now? The assistant restarts for about a minute.')) return;
   try {
     const r = await POST('/api/update/now'); msg($('#updMsg'), r.words, true); $('#updNow').disabled = true;
-    const was = (await GET('/api/update')).current; let n = 0;
+    const was = (await api('GET', '/api/update', undefined, CHECK_LIMIT_MS)).current; let n = 0;
     const t = setInterval(async () => {
-      n++; try { const u = await GET('/api/update/log'); if (u.log) { $('#updLog').classList.remove('hidden'); $('#updLog').textContent = u.log; $('#updLog').scrollTop = 1e9; } if (!u.pending || u.current !== was || n > 60) { clearInterval(t); showUpdates(u); if (u.current !== was) msg($('#updMsg'), 'Updated to ' + u.current + '.', true); } } catch {}
+      n++; try { const u = await api('GET', '/api/update/log', undefined, CHECK_LIMIT_MS); if (u.log) { $('#updLog').classList.remove('hidden'); $('#updLog').textContent = u.log; $('#updLog').scrollTop = 1e9; } if (!u.pending || u.current !== was || n > 60) { clearInterval(t); showUpdates(u); if (u.current !== was) { msg($('#updMsg'), 'Updated to ' + u.current + '. Reloading…', true); setTimeout(() => reloadIfNewVersion(u.current), 1500); } } } catch {}
     }, 5000);
   } catch (er) { msg($('#updMsg'), er.message); }
 };

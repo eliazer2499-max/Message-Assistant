@@ -134,6 +134,12 @@ on('GET', /^\/api\/update$/, async () => upd.info());
 on('POST', /^\/api\/update\/auto$/, async (req, { b }) => { const on = !!b.on; upd.setAuto(on); audit('admin', 'update.auto', on ? 'on' : 'off'); return upd.info(); });
 on('POST', /^\/api\/update\/check$/, async () => upd.info({ fresh: true }));
 on('GET', /^\/api\/update\/log$/, async () => ({ log: upd.logTail(40), ...(await upd.info()) }));
+// 1.0.3: where updates come from (saved for the root updater too; https only)
+on('POST', /^\/api\/update\/source$/, async (req, { b }) => {
+  let v; try { v = upd.setSource(b.url); } catch (e) { throw new auth.AuthError(400, e.message); }
+  audit('admin', 'update.source', v || 'default'); return { ok: true, ...upd.sourceInfo() };
+});
+on('POST', /^\/api\/update\/source\/reset$/, async () => { upd.resetSource(); audit('admin', 'update.source', 'default'); return { ok: true, ...upd.sourceInfo() }; });
 on('POST', /^\/api\/update\/now$/, async () => { upd.requestNow(); audit('admin', 'update.now', ''); return { ok: true, words: 'Update started. The dashboard reloads by itself in a minute or two.' }; });
 
 // ---------- the person's own web chat (1.0.2): /me — its own cookie, never the admin's ----------
@@ -203,11 +209,16 @@ on('POST', /^\/api\/messages\/signout$/, async () => { audit('admin', 'messages.
 
 // ---------- static ----------
 function serveStatic(req, res, p) {
-  const rel = p === '/' ? 'index.html' : (p === '/me' || p === '/me/') ? 'me.html' : p.slice(1);
+  const rel = p === '/' ? 'index.html' : (p === '/me' || p === '/me/') ? 'me.html' : p === '/favicon.ico' ? 'icon-192.png' : p.slice(1);
   if (!/^[a-z0-9._-]+$/i.test(rel)) return false;
   const f = path.join(PUBLIC, rel);
   if (!fs.existsSync(f)) return false;
-  send(res, 200, fs.readFileSync(f), { 'Content-Type': TYPES[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+  const ext = path.extname(f);
+  let body = fs.readFileSync(f);
+  // 1.0.3: every page asks for its files with ?v=<version>, so a phone can never mix a new page with an old cached
+  // style, script or logo (1.0.2 on a phone showed the old logo full width and an old "Checking…").
+  if (ext === '.html' || ext === '.webmanifest' || ext === '.js') body = Buffer.from(body.toString('utf8').replaceAll('__V__', encodeURIComponent(VERSION)));
+  send(res, 200, body, { 'Content-Type': TYPES[ext] || 'application/octet-stream', 'Cache-Control': ext === '.html' ? 'no-store' : 'no-cache' });
   return true;
 }
 

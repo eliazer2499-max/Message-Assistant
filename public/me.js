@@ -1,6 +1,6 @@
 // 1.0.2: the person's own web chat. The same conversation as their texts: what they type here is answered here AND
 // texted to their phone; what they text from the phone shows up here (checked every few seconds).
-import { renderMarkdown } from './markdown.js';
+import { renderMarkdown } from './markdown.js?v=__V__';
 'use strict';
 const $ = (s) => document.querySelector(s);
 let CSRF = '', last = 0, timer = null, items = new Map(), first = true;

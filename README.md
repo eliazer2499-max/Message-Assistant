@@ -89,6 +89,7 @@ sudo messageassistant keys            # AI keys (masked) and their status
 sudo messageassistant admin-phone +1…
 sudo messageassistant reset-password
 sudo messageassistant check-update    # installed vs available (does not install)
+sudo messageassistant update-source show|set <url>|reset   # where updates come from (https only)
 sudo messageassistant portal on|off|show          # people's own web chat at /me
 sudo messageassistant sites           # every published site; sites-unpublish <#|name>
 sudo messageassistant sites-approval on|off|show   # does the admin approve each publish?
@@ -125,7 +126,9 @@ Nothing updates by itself. Press **Update now** in Dashboard → Settings → Up
 5. restarts and checks `/healthz`; if the new version does not answer within a minute, it switches back to the previous release by itself.
 
 It never changes `/etc/messageassistant/env`, the Caddy files or your data, and it repairs the service file if `ExecStart` was changed by hand.
-Dashboard → **Settings → Updates** shows this server's version and the latest, with **Update now** and **Check again**.
+Dashboard → **Settings → Updates** shows this server's version and the latest, with **Update now** and **Check now**. A check always ends within about 15 seconds: up to date, a newer version available, or "Couldn't reach the update source" with the reason.
+
+**Update source** (same card): the default is this repo's `/docs` folder on GitHub. Choose "Another address" for your own https folder (it needs `version.json` and `messageassistant-latest.tar.gz` + `.sha256`; a GitHub repo link works too) and press Save; **Reset to default** goes back. The saved address is tried first, then the default. The root updater reads the same setting, checks every download's sha256 and only installs newer versions. Same from the command line: `sudo messageassistant update-source show|set <url>|reset`.
 Logs: `sudo messageassistant logs` (or `journalctl -u messageassistant-update`). While it runs, the dashboard shows the update log live.
 Once a day the app only *checks*: a new version shows as "update available" and you get one short text (Settings → "Text me when a new version is out" turns the text off). It never installs by itself.
 

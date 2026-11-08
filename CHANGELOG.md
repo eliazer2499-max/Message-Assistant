@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.3 — 2026-11-08
+- **Updates: "Checking…" always finishes.** Settings → Updates now ends every check within about 15 seconds with one of three answers: "Up to date (1.0.3)", "1.0.x available — Update now", or "Couldn't reach the update source" with a short reason (no answer in time, no version.json there, broken version.json, address not found). Before, the line stayed on "Checking…" whenever the check or another part of the Settings page failed or was slow, and "Check again" showed no progress.
+- The check asks every source at the same time with one time limit, shares one look when two checks run together, and skips GitHub's few-minutes-old cached copy.
+- If "Update now" did not start on the server, the page says so (with `sudo messageassistant update`) instead of "starting…" forever.
+- **Editable update source** (Settings → Updates → Update source, like My Assistant): the default GitHub folder or another https address; a GitHub repo link works too (its /docs folder). Save, Reset to default, and the order the sources are tried. The root updater uses the saved address too; it still checks the sha256 of every download and never installs an older or the same version.
+- `sudo messageassistant update-source show|set <url>|reset`.
+- **Logo no longer fills the page.** On a phone, 1.0.2 could show the old logo full width above Updates: the page was new but the phone kept the old style and logo files. Now every page asks for its files with `?v=<version>` (style, script, logo, icons, manifest), pages are never cached, each logo has its own small size (28 px in the header, 72 px on sign-in) even if the style file fails, and the dashboard reloads itself once after an update. App icon, favicon and home-screen icons are the new logo everywhere.
+
 ## 1.0.2 — 2026-11-08
 - **Websites for every approved person:** they ask by text, the assistant builds HTML/CSS/JavaScript in their own folder and sends a phone-size picture (no code in the chat; code only on request, as a file). Each person's files are separate (no `..`, no symlinks out, no hidden files).
 - **Publishing with one YES:** one question with the link; a code only when two are waiting; same site again replaces the old request; 30-minute expiry. Live at `/sites/<name><#>-<site>/` with a 404 page (or the site's own `404.html`). Unpublish by text or from the dashboard.
