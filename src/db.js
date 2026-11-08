@@ -30,6 +30,14 @@ CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id
   priority INTEGER DEFAULT 5, status TEXT DEFAULT 'queued', tries INTEGER DEFAULT 0, created INTEGER, sent_at INTEGER, error TEXT);
 CREATE TABLE IF NOT EXISTS seen (id TEXT PRIMARY KEY, ts INTEGER);
 CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, level TEXT, text TEXT, cleared INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS sites (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT, public_name TEXT UNIQUE, project TEXT, bytes INTEGER DEFAULT 0,
+  created INTEGER, updated INTEGER, request_id INTEGER);
+CREATE TABLE IF NOT EXISTS site_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, site TEXT, public_name TEXT, project TEXT, folder TEXT,
+  status TEXT, created INTEGER, updated INTEGER, preview_token TEXT, shot_token TEXT, decided_by TEXT);
+CREATE TABLE IF NOT EXISTS media (token TEXT PRIMARY KEY, file TEXT, name TEXT, user_id INTEGER, created INTEGER, expires INTEGER);
+CREATE TABLE IF NOT EXISTS user_codes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, phone TEXT, code_hash TEXT, created INTEGER, expires INTEGER, tries INTEGER DEFAULT 0, used INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS user_sessions (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, csrf TEXT, created INTEGER, expires INTEGER, ip TEXT, ua TEXT);
+CREATE INDEX IF NOT EXISTS idx_usess_user ON user_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_msg_user ON messages(user_id, id);
 CREATE INDEX IF NOT EXISTS idx_mem_user ON memory(user_id);
 CREATE INDEX IF NOT EXISTS idx_rem_due ON reminders(active, due);
@@ -46,6 +54,12 @@ export function openDb(file) {
   db.exec(SCHEMA);
   try { if (f !== ':memory:') fs.chmodSync(f, 0o600); } catch {}
   if (get('PRAGMA user_version').user_version < 1) db.exec('PRAGMA user_version=1');
+  // 1.0.2: sites (per-person address part, "chosen people" flag) and pictures/files on outgoing texts
+  const cols = (t) => all(`PRAGMA table_info(${t})`).map(c => c.name);
+  const add = (t, c, type) => { if (!cols(t).includes(c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`); };
+  add('users', 'site_slug', 'TEXT'); add('users', 'sites_allowed', 'INTEGER');
+  add('outbox', 'media', 'TEXT'); add('outbox', 'media_url', 'TEXT');
+  if (get('PRAGMA user_version').user_version < 2) db.exec('PRAGMA user_version=2');
   return db;
 }
 
@@ -80,6 +94,12 @@ export const DEFAULTS = {
   gm_state_since: '0',
   gm_baseline_done: '0',
   busy_text: 'Busy right now, one moment. I will answer as soon as I can.',
+  sites_mode: 'all',                            // 1.0.2: who can build sites: all | chosen | off
+  sites_approval: '0',                          // 1.0.2: 1 = the admin approves every publish too
+  sites_quota_mb: '50',                         // per person: workspace + published sites
+  sites_max: '5',                               // published sites per person
+ portal_enabled: '1',                          // 1.0.2: people can sign in to their own web chat
+  update_notify: '1',                           // 1.0.2: text the admin once when a new version is out
 };
 export function setting(k) {
   const r = get('SELECT v FROM settings WHERE k=?', k);

@@ -23,13 +23,13 @@ export class MockChannel extends EventEmitter {
     this.emit('message', m);
     return m;
   }
-  async send({ convId = null, phone = null, text }) {
+  async send({ convId = null, phone = null, text, media = null, mediaUrl = null }) {
     if (this.state !== 'connected') { const e = new Error('Messages is not connected'); e.notConnected = true; throw e; }
     if (this.failNext > 0) { this.failNext--; throw new Error('send failed (mock)'); }
     const c = convId || (phone ? this.convFor(phone) : null);
     if (!c) throw new Error('no conversation');
     const p = phone || [...this.convs.entries()].find(([, v]) => v === c)?.[0] || '';
-    this.sent.push({ convId: c, phone: p, text, ts: Date.now() });
+    this.sent.push({ convId: c, phone: p, text, ts: Date.now(), ...(media ? { media, mediaUrl } : {}) });
     return { ok: true, convId: c };
   }
   async screen() { return null; }

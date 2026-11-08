@@ -102,8 +102,11 @@ export function remove(id, actor = 'admin') {
     run('DELETE FROM users WHERE id=?', u.id);
   });
   audit(actor, 'user.removed', u.phone);
+  for (const fn of onRemove) { try { fn(u.id); } catch {} }
   return { ok: true };
 }
+const onRemove = [];
+export function whenRemoved(fn) { onRemove.push(fn); }     // 1.0.2: sites.js removes their files and sites
 export function updateUser(id, b = {}) {
   const u = userById(id); if (!u) throw notFound();
   if (b.name !== undefined) run('UPDATE users SET name=? WHERE id=?', String(b.name).slice(0, 80), u.id);

@@ -13,6 +13,7 @@
 <body>
 <div id="login" class="screen hidden">
   <div class="card narrow">
+    <img src="icon.svg" class="logo big" alt="">
     <h1>Message Assistant</h1>
     <p class="muted">Admin sign-in</p>
     <div class="tabs" id="loginTabs"><button data-t="phone" class="on">Phone code</button><button data-t="password">Password</button></div>
@@ -35,7 +36,7 @@
 </div>
 
 <div id="app" class="screen hidden">
-  <header><span id="brand">Message Assistant</span><span id="connDot" class="dot"></span><button id="logout" class="link">Sign out</button></header>
+  <header><img src="icon.svg" class="logo" alt=""><span id="brand">Message Assistant</span><span id="connDot" class="dot"></span><button id="logout" class="link">Sign out</button></header>
   <div id="banner" class="banner hidden"></div>
   <main>
     <section id="v-home" class="view">
@@ -97,6 +98,21 @@
       </div>
     </section>
 
+    <section id="v-sites" class="view hidden">
+      <div class="card" id="sitesSet">
+        <h2>Site publishing</h2>
+        <label class="check"><input type="checkbox" id="sApproval"> Admin approves each publish</label>
+        <p class="muted small" id="sApprovalHelp">Off: the person's own YES puts their site online.</p>
+        <label>Who can build sites<select id="sMode"><option value="all">Everyone</option><option value="chosen">Only chosen people</option><option value="off">Nobody (off)</option></select></label>
+        <div id="sChosen" class="hidden"></div>
+        <div class="row"><label>Space per person (MB)<input id="sQuota" inputmode="decimal"></label><label>Sites per person<input id="sMax" inputmode="numeric"></label></div>
+        <div class="row"><button class="primary" id="sSave">Save</button></div>
+        <p id="sMsg" class="msg"></p>
+      </div>
+      <div class="card" id="sWaitCard"><h2>Waiting for you</h2><div id="sWaiting"></div></div>
+      <div class="card"><h2>Published sites</h2><div id="sList"></div></div>
+    </section>
+
     <section id="v-settings" class="view hidden">
       <div class="card" id="setForm">
         <h2>Settings</h2>
@@ -112,6 +128,8 @@
         <label>Gemini model (blank = default)<input data-s="model"></label>
         <label class="check"><input type="checkbox" data-s="browser_enabled"> Web browser for the assistant</label>
         <label>Browser time per message (seconds)<input data-s="browser_job_seconds" inputmode="numeric"></label>
+        <label class="check"><input type="checkbox" data-s="portal_enabled"> People can sign in to their own web chat with their phone number (<span id="portalUrl">/me</span>)</label>
+        <label class="check"><input type="checkbox" data-s="update_notify"> Text me when a new version is out (once a day check; it never installs by itself)</label>
         <label>Alert address (optional, free: https://ntfy.sh/your-secret-topic)<input data-s="alert_webhook" placeholder="https://ntfy.sh/…"></label>
         <div class="row"><button class="primary" id="saveSettings">Save</button><button id="backupBtn">Back up now</button></div>
         <p id="setMsg" class="msg"></p>
@@ -122,6 +140,8 @@
         <p class="muted small">Updates install only when you press Update now. Only newer versions; it goes back by itself if the new one does not start.</p>
         <div class="row"><button class="primary" id="updNow">Update now</button><button id="updCheck">Check again</button></div>
         <p id="updLast" class="muted small"></p>
+        <div id="updNotes" class="notes hidden"></div>
+        <pre id="updLog" class="log hidden"></pre>
         <p id="updMsg" class="msg"></p>
       </div>
       <div class="card">
@@ -140,6 +160,7 @@
     <button data-v="home" class="on">🏠<span>Home</span></button>
     <button data-v="people">👥<span>People</span><b id="pendBadge" class="badge hidden"></b></button>
     <button data-v="connect">📱<span>Connect</span></button>
+    <button data-v="sites">🌐<span>Sites</span><b id="sitesBadge" class="badge hidden"></b></button>
     <button data-v="keys">🔑<span>AI keys</span></button>
     <button data-v="settings">⚙️<span>Settings</span></button>
   </nav>

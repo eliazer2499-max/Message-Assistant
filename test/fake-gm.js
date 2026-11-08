@@ -14,7 +14,7 @@ const fake = http.createServer(async (req, res) => {
   let b = ''; for await (const c of req) b += c;
   const u = new URL(req.url, 'http://x'); const p = u.pathname;
   const html = (h) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(page(h)); };
-  if (req.method === 'POST' && p === '/send') { const j = JSON.parse(b); const c = st.convs.find(x => x.id === j.conv); c.msgs.push({ id: 'o' + (++st.n), out: true, text: j.text }); res.end('{}'); return; }
+  if (req.method === 'POST' && p === '/send') { const j = JSON.parse(b); const c = st.convs.find(x => x.id === j.conv); c.msgs.push({ id: 'o' + (++st.n), out: true, text: j.text, ...(j.media ? { media: j.media } : {}) }); res.end('{}'); return; }
   if (req.method === 'POST' && p === '/usehere') { st.mode = 'connected'; st.banner = ''; res.end('{}'); return; }
   if (req.method === 'POST' && p === '/newchat') { const j = JSON.parse(b); const d10 = (s) => String(s).replace(/\D/g, '').slice(-10); const ex = st.convs.find(c => d10(c.name) === d10(j.to)); if (ex) { res.end(JSON.stringify({ id: ex.id })); return; } const id = String(500 + (++st.n)); st.convs.unshift({ id, name: j.to, unread: false, msgs: [] }); res.end(JSON.stringify({ id })); return; }
   if (p === '/live') { const cm = /\/conversations\/(\w+)$/.exec(u.searchParams.get('c') || ''); const c = cm && st.convs.find(x => x.id === cm[1]); if (c) c.unread = false; res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ list: listHtml(), msgs: c ? msgsHtml(c) : null, banner: st.banner })); }
@@ -29,7 +29,7 @@ const fake = http.createServer(async (req, res) => {
   if (m) {
     const c = st.convs.find(x => x.id === m[1]); if (!c) { res.writeHead(404); return res.end(); }
     c.unread = false;
-    return html(`<nav>${listHtml()}</nav><main>${msgsHtml(c)}</main><textarea data-e2e-message-input-box></textarea><script>const t=document.querySelector('textarea');t.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();const v=t.value;t.value='';fetch('/send',{method:'POST',body:JSON.stringify({conv:'${c.id}',text:v})})}})</script>`);
+    return html(`<nav>${listHtml()}</nav><main>${msgsHtml(c)}</main><textarea data-e2e-message-input-box></textarea>${st.noAttach ? '' : '<input type="file" accept="image/*,*/*" style="display:none">'}<script>const f=document.querySelector('input[type=file]');let att=null;if(f)f.addEventListener('change',()=>{att=f.files[0]&&f.files[0].name;});const t=document.querySelector('textarea');t.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();const v=t.value;t.value='';if(!v&&!att)return;const m=att;att=null;fetch('/send',{method:'POST',body:JSON.stringify({conv:'${c.id}',text:m?(v||'[file] '+m):v,media:m})})}})</script>`);
   }
   res.writeHead(404); res.end();
 });

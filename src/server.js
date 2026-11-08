@@ -17,12 +17,17 @@ import * as B from './browser.js';
 import { startApp, channel as appChannel, STATE_WORDS } from './app.js';
 import { backup } from './scheduler.js';
 import * as upd from './updates.js';
+import * as SITES from './sites.js';
+import { serveSite, serveTree, notFoundPage, SANDBOX } from './siteserve.js';
+import { adminDecide, adminUnpublish } from './siteflow.js';
+import * as portal from './portal.js';
+import { handleWebText } from './router.js';
 
 let CH = null;
 const PUBLIC = path.join(APP_DIR, 'public');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 const EDITABLE = ['assistant_name', 'timezone', 'waiting_text', 'welcome_text', 'busy_text', 'daily_limit', 'max_steps', 'job_minutes', 'history_messages', 'max_parallel',
-  'browser_enabled', 'browser_job_seconds', 'browser_parallel', 'alert_webhook', 'model'];
+  'browser_enabled', 'browser_job_seconds', 'browser_parallel', 'alert_webhook', 'model', 'update_notify', 'portal_enabled'];
 
 function send(res, status, body, headers = {}) {
   const h = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
@@ -53,7 +58,7 @@ function messagesStatus() {
 }
 
 const routes = [];
-const on = (method, re, fn, { open = false } = {}) => routes.push({ method, re, fn, open });
+const on = (method, re, fn, { open = false, user = false } = {}) => routes.push({ method, re, fn, open, user });
 
 // ---------- public ----------
 on('GET', /^\/healthz$/, async () => ({ ok: true, version: VERSION }), { open: true });
@@ -69,6 +74,7 @@ on('GET', /^\/api\/overview$/, async () => ({
   version: VERSION, messages: messagesStatus(), alerts: listAlerts(true),
   people: { pending: get("SELECT COUNT(*) AS n FROM users WHERE status='pending'").n, approved: get("SELECT COUNT(*) AS n FROM users WHERE status='approved'").n, blocked: get("SELECT COUNT(*) AS n FROM users WHERE status='blocked'").n },
   keys: aikeys.listKeys().map(k => ({ id: k.id, name: k.name, status: k.status })), queue: queueStats(), browser: B.stats(),
+  sites: { waiting: SITES.waitingForAdmin().length, published: get('SELECT COUNT(*) AS n FROM sites').n }, update: upd.badge(),
   today: get('SELECT COALESCE(SUM(messages),0) AS messages, COALESCE(SUM(replies),0) AS replies, COALESCE(SUM(model_calls),0) AS model_calls FROM usage WHERE day=?', users.today()),
 }));
 on('POST', /^\/api\/alerts\/clear$/, async (req, { b }) => { clearAlerts(b.id || null); return { ok: true }; });
@@ -100,12 +106,13 @@ on('POST', /^\/api\/keys\/(\d+)\/test$/, async (req, { m }) => testKeyById(Numbe
 on('POST', /^\/api\/keys\/(\d+)\/wake$/, async (req, { m }) => ({ key: aikeys.wakeKey(Number(m[1])) }));
 
 // ---------- settings ----------
-on('GET', /^\/api\/settings$/, async () => { const s = allSettings(); const o = {}; for (const k of EDITABLE) o[k] = s[k]; return { settings: o, admin_phones: users.adminPhones(), admin_username: setting('admin_username') }; });
+on('GET', /^\/api\/settings$/, async () => { const s = allSettings(); const o = {}; for (const k of EDITABLE) o[k] = s[k]; return { settings: o, portal_url: cfg.publicUrl + '/me', admin_phones: users.adminPhones(), admin_username: setting('admin_username') }; });
 on('POST', /^\/api\/settings$/, async (req, { b }) => {
   for (const k of EDITABLE) if (b[k] !== undefined) {
     let v = String(b[k] ?? '').slice(0, 2000);
     if (k === 'alert_webhook' && v && !/^https:\/\/[^\s]+$/.test(v)) throw Object.assign(new Error('The alert address must start with https://'), { status: 400 });
     if (k === 'timezone') { try { new Date().toLocaleString('en-US', { timeZone: v }); } catch { throw Object.assign(new Error('Unknown timezone'), { status: 400 }); } }
+    if (k === 'portal_enabled') { portal.setEnabled(v === '1', 'admin'); continue; }
     setSetting(k, v);
   }
   if (b.admin_phones !== undefined) {
@@ -126,7 +133,66 @@ on('POST', /^\/api\/backup$/, async () => ({ file: path.basename(backup('manual'
 on('GET', /^\/api\/update$/, async () => upd.info());
 on('POST', /^\/api\/update\/auto$/, async (req, { b }) => { const on = !!b.on; upd.setAuto(on); audit('admin', 'update.auto', on ? 'on' : 'off'); return upd.info(); });
 on('POST', /^\/api\/update\/check$/, async () => upd.info({ fresh: true }));
+on('GET', /^\/api\/update\/log$/, async () => ({ log: upd.logTail(40), ...(await upd.info()) }));
 on('POST', /^\/api\/update\/now$/, async () => { upd.requestNow(); audit('admin', 'update.now', ''); return { ok: true, words: 'Update started. The dashboard reloads by itself in a minute or two.' }; });
+
+// ---------- the person's own web chat (1.0.2): /me — its own cookie, never the admin's ----------
+const ucookie = () => `Path=/; HttpOnly; SameSite=Strict${isHttps() ? '; Secure' : ''}`;
+const U = (method, re, fn, o = {}) => on(method, re, fn, { user: true, ...o });
+U('GET', /^\/api\/u\/me$/, async (req, { usession }) => usession ? portal.me(usession) : { signed_in: false, enabled: portal.enabled(), product: setting('assistant_name') || PRODUCT }, { open: true });
+U('POST', /^\/api\/u\/login\/code$/, async (req, { b }) => portal.requestCode(b.phone, clientIp(req)), { open: true });
+U('POST', /^\/api\/u\/login\/verify$/, async (req, { b }) => {
+  const s = portal.verifyCode(b.phone, b.code, clientIp(req), req.headers['user-agent']);
+  return { __headers: { 'Set-Cookie': `msa_uid=${s.id}; Max-Age=${Math.floor(portal.SESSION_TTL / 1000)}; ${ucookie()}` }, ok: true, csrf: s.csrf };
+}, { open: true });
+U('POST', /^\/api\/u\/logout$/, async (req, { usid }) => { portal.endSession(usid); return { __headers: { 'Set-Cookie': `msa_uid=; Max-Age=0; ${ucookie()}` }, ok: true }; }, { open: true });
+U('GET', /^\/api\/u\/chat$/, async (req, { usession, url }) => ({ items: portal.chat(usession.user_id, Number(url.searchParams.get('after')) || 0), now: Date.now() }));
+U('POST', /^\/api\/u\/send$/, async (req, { usession, b }) => {
+  const text = String(b.text || '').trim().slice(0, 4000);
+  if (!text) throw Object.assign(new Error('Type a message first.'), { status: 400 });
+  if (!portal.canSend(usession.user_id)) throw Object.assign(new Error('Too many messages in a minute. Wait a moment.'), { status: 429 });
+  const r = await handleWebText(users.userById(usession.user_id), text);
+  return { ok: true, action: r.action };
+});
+
+// ---------- sites (1.0.2) ----------
+function sitesPage() {
+  const waiting = SITES.waitingForAdmin().map(r => { const u = users.userById(r.user_id); return { id: r.id, user: u ? users.publicUser(u).label : '#' + r.user_id, user_id: r.user_id, site: r.site,
+    url: SITES.siteUrl(r.public_name), preview: SITES.previewUrl(r), shot: r.shot_token ? `/m/${r.shot_token}/site.png` : null, since: r.updated }; });
+  const people = users.listUsers('approved').map(u => ({ id: u.id, label: u.label, allowed: SITES.allowed(u.id), chosen: (users.userById(u.id).sites_allowed === 1), used: SITES.usageText(u.id) }));
+  return { settings: SITES.config(), waiting, sites: SITES.listSites(), people };
+}
+on('GET', /^\/api\/sites$/, async () => sitesPage());
+on('POST', /^\/api\/sites\/settings$/, async (req, { b }) => { SITES.setConfig(b, 'admin'); return sitesPage(); });
+on('POST', /^\/api\/sites\/people\/(\d+)$/, async (req, { m, b }) => { SITES.setAllowed(Number(m[1]), !!b.allowed, 'admin'); return sitesPage(); });
+on('POST', /^\/api\/sites\/requests\/(\d+)\/(approve|reject)$/, async (req, { m }) => ({ ...(await adminDecide(Number(m[1]), m[2] === 'approve', 'admin (dashboard)')), ...sitesPage() }));
+on('POST', /^\/api\/sites\/(\d+)\/unpublish$/, async (req, { m }) => { adminUnpublish(Number(m[1]), 'admin (dashboard)'); return sitesPage(); });
+
+// published sites, private previews, private pictures/files: never the dashboard's own headers or cookies
+function serveSitesPaths(req, res, url) {
+  const p = url.pathname;
+  if (p === '/sites' || p.startsWith('/sites/')) return serveSite(req, res, SITES.dirs.sites());
+  let m = /^\/preview\/([A-Za-z0-9_-]{20,40})(\/.*)?$/.exec(p);
+  if (m) {
+    const r = SITES.requestByPreview(m[1]);
+    if (!r || !fs.existsSync(SITES.stagingDir(r.id))) { const b = Buffer.from(notFoundPage(p, null)); res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': b.length, 'Content-Security-Policy': SANDBOX, 'Cache-Control': 'no-store' }); res.end(b); return true; }
+    return serveTree(req, res, SITES.stagingDir(r.id), `/preview/${m[1]}/`, m[2]);
+  }
+  m = /^\/m\/([A-Za-z0-9_-]{20,40})(?:\/[^/]*)?$/.exec(p);
+  if (m) {
+    const r = SITES.mediaByToken(m[1]);
+    if (!r) { res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('Not found'); return true; }
+    const ext = path.extname(r.file).toLowerCase();
+    const img = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' }[ext];
+    const buf = fs.readFileSync(r.file);
+    // a picture shows; any other file is a plain-text download (it never runs on this address)
+    res.writeHead(200, { 'Content-Type': img || 'text/plain; charset=utf-8', 'Content-Length': buf.length, 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': SANDBOX, 'Cache-Control': 'private, no-store',
+      'Referrer-Policy': 'no-referrer', ...(img ? {} : { 'Content-Disposition': `attachment; filename="${String(r.name || 'file.txt').replace(/[^A-Za-z0-9._-]/g, '_')}"` }) });
+    res.end(req.method === 'HEAD' ? undefined : buf);
+    return true;
+  }
+  return false;
+}
 
 // ---------- Google Messages connection (live view) ----------
 on('GET', /^\/api\/messages\/status$/, async () => messagesStatus());
@@ -137,7 +203,7 @@ on('POST', /^\/api\/messages\/signout$/, async () => { audit('admin', 'messages.
 
 // ---------- static ----------
 function serveStatic(req, res, p) {
-  const rel = p === '/' ? 'index.html' : p.slice(1);
+  const rel = p === '/' ? 'index.html' : (p === '/me' || p === '/me/') ? 'me.html' : p.slice(1);
   if (!/^[a-z0-9._-]+$/i.test(rel)) return false;
   const f = path.join(PUBLIC, rel);
   if (!fs.existsSync(f)) return false;
@@ -149,19 +215,29 @@ export function handler() {
   return async (req, res) => {
     const url = new URL(req.url, 'http://x');
     try {
+      if (/^\/(sites|preview|m)(\/|$)/.test(url.pathname)) {
+        if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain' }); return res.end('Method not allowed'); }
+        if (serveSitesPaths(req, res, url)) return;
+        const nf = Buffer.from(notFoundPage(url.pathname, null)); res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': nf.length, 'Content-Security-Policy': SANDBOX }); return res.end(nf);
+      }
       if (req.method === 'GET' && !url.pathname.startsWith('/api/') && url.pathname !== '/healthz') { if (serveStatic(req, res, url.pathname)) return; return send(res, 404, 'Not found'); }
       const r = routes.find(x => x.method === req.method && x.re.test(url.pathname));
       if (!r) return send(res, 404, { error: 'Not found' });
-      const sid = cookies(req).msa_sid;
-      const session = auth.sessionFrom(sid);
-      if (!r.open && !session) return send(res, 401, { error: 'Please sign in' });
+      const ck = cookies(req);
+      // admin routes read only the admin cookie; the person's web chat (1.0.2) reads only its own cookie
+      const sid = r.user ? null : ck.msa_sid, usid = r.user ? ck.msa_uid : null;
+      const session = r.user ? null : auth.sessionFrom(sid);
+      const usession = r.user ? portal.sessionFrom(usid) : null;
+      const who = r.user ? usession : session;
+      if (!r.open && !who) return send(res, 401, { error: r.user && !portal.enabled() ? 'The web chat is turned off by the admin.' : 'Please sign in' });
       if (req.method !== 'GET') {
         const origin = req.headers.origin;
-        if (origin && new URL(origin).host !== req.headers.host && new URL(origin).host !== new URL(cfg.publicUrl).host) return send(res, 403, { error: 'Wrong origin' });
-        if (!r.open && req.headers['x-csrf-token'] !== session.csrf) return send(res, 403, { error: 'Please reload the page' });
+        if (origin && origin !== 'null' && new URL(origin).host !== req.headers.host && new URL(origin).host !== new URL(cfg.publicUrl).host) return send(res, 403, { error: 'Wrong origin' });
+        if (origin === 'null') return send(res, 403, { error: 'Wrong origin' });
+        if (!r.open && req.headers['x-csrf-token'] !== who.csrf) return send(res, 403, { error: 'Please reload the page' });
       }
       const b = req.method === 'POST' ? await body(req) : {};
-      const out = await r.fn(req, { m: url.pathname.match(r.re), b, url, session, sid });
+      const out = await r.fn(req, { m: url.pathname.match(r.re), b, url, session, sid, usession, usid });
       if (out && out.__raw) return send(res, out.__status || 200, out.__raw, { 'Content-Type': out.__type || 'application/octet-stream' });
       if (out && out.__status === 204) { res.writeHead(204, { 'Cache-Control': 'no-store' }); return res.end(); }
       const headers = (out && out.__headers) || {};

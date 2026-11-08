@@ -43,7 +43,7 @@ $$('#nav button').forEach(b => b.onclick = () => go(b.dataset.v));
 function go(v) {
   VIEW = v; $$('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === v)); $$('.view').forEach(s => s.classList.toggle('hidden', s.id !== 'v-' + v));
   clearInterval(screenTimer); screenTimer = null;
-  if (v === 'home') refreshOverview(); if (v === 'people') loadPeople(); if (v === 'keys') loadKeys(); if (v === 'settings') loadSettings();
+  if (v === 'home') refreshOverview(); if (v === 'people') loadPeople(); if (v === 'keys') loadKeys(); if (v === 'settings') loadSettings(); if (v === 'sites') loadSites();
   if (v === 'connect') { loadConnect(); screenTimer = setInterval(loadConnect, 1500); }
 }
 const STATE_CLASS = { connected: 'ok', phone_offline: 'warn', pairing: 'warn', signed_out: 'bad', error: 'bad', other_tab: 'warn' };
@@ -56,6 +56,7 @@ async function refreshOverview() {
   const down = m.state !== 'connected';
   $('#banner').classList.toggle('hidden', !down);
   if (down) $('#banner').textContent = `Google Messages: ${m.words}. Texts wait until it is fixed (Connect tab).${m.outbox_waiting ? ' ' + m.outbox_waiting + ' waiting.' : ''}`;
+  sitesBadge(o.sites ? o.sites.waiting : 0);
   if (VIEW !== 'home') { badge(o.people.pending); return; }
   $('#homeConn').innerHTML = `<h2>Google Messages</h2><p class="state ${cls}">${esc(m.words)}</p><p class="muted small">since ${ago(m.since)}${m.detail ? ' · ' + esc(m.detail) : ''}${m.outbox_waiting ? ' · ' + m.outbox_waiting + ' text(s) waiting to go out' : ''}</p>${down ? '<button class="primary" id="toConnect">Open Connect</button>' : ''}`;
   const tc = $('#toConnect'); if (tc) tc.onclick = () => go('connect');
@@ -65,6 +66,7 @@ async function refreshOverview() {
   $('#homeQueue').innerHTML = `<div class="kv"><span>Thinking now</span><b>${o.queue.running}</b><span>Waiting in line</span><b>${o.queue.queued}</b><span>Waiting for a free AI key</span><b>${o.queue.waiting_for_ai}</b><span>Browser steps running / waiting</span><b>${o.browser.running} / ${o.browser.waiting}</b><span>Replies today</span><b>${o.today.replies}</b></div>`;
   badge(o.people.pending);
 }
+function sitesBadge(n) { const b = $('#sitesBadge'); b.textContent = n; b.classList.toggle('hidden', !n); }
 function badge(n) { const b = $('#pendBadge'); b.textContent = n; b.classList.toggle('hidden', !n); }
 $('#clearAlerts').onclick = async () => { await POST('/api/alerts/clear'); refreshOverview(); };
 const statusWord = (s) => ({ ok: 'ok', cooling: 'cooling down', bad: 'bad', off: 'off', no_key: 'no key' }[s] || s);
@@ -194,11 +196,45 @@ $('#kfSave').onclick = async () => {
   catch (er) { msg($('#kfMsg'), er.message); }
 };
 
+
+// ---------------- sites (1.0.2) ----------------
+let SITES = null;
+function showSites(d) {
+  SITES = d; const c = d.settings;
+  $('#sApproval').checked = !!c.approval; $('#sMode').value = c.mode; $('#sQuota').value = c.quota_mb; $('#sMax').value = c.max_sites;
+  $('#sApprovalHelp').textContent = c.approval ? 'On: after the person\'s YES, you get a picture and a private preview link (text + here) and approve or reject.' : 'Off: the person\'s own YES puts their site online.';
+  const ch = $('#sChosen'); ch.classList.toggle('hidden', c.mode !== 'chosen');
+  ch.innerHTML = c.mode === 'chosen' ? (d.people.length ? d.people.map(p => `<label class="check"><input type="checkbox" data-pid="${p.id}" ${p.chosen ? 'checked' : ''}> ${esc(p.label)} <span class="muted small">${esc(p.used)}</span></label>`).join('') : '<p class="muted small">No approved people yet.</p>') : '';
+  $$('[data-pid]', ch).forEach(i => i.onchange = async () => { try { showSites(await POST('/api/sites/people/' + i.dataset.pid, { allowed: i.checked })); } catch (er) { msg($('#sMsg'), er.message); } });
+  $('#sWaitCard').classList.toggle('hidden', !d.waiting.length);
+  $('#sWaiting').innerHTML = d.waiting.map(r => `<div class="item"><div class="top"><span class="name">${esc(r.site)}</span><span class="chip pending">S${r.id}</span></div>
+    <div class="sub">${esc(r.user)} · ${ago(r.since)}</div>${r.shot ? `<img class="shot" src="${esc(r.shot)}" alt="Picture of ${esc(r.site)}">` : ''}
+    <div class="sub"><a href="${esc(r.preview)}" target="_blank" rel="noopener">Open private preview</a> · goes to ${esc(r.url)}</div>
+    <div class="acts"><button class="primary" data-ok="${r.id}">Approve</button><button class="danger" data-no="${r.id}">Reject</button></div></div>`).join('');
+  $$('[data-ok]').forEach(b => b.onclick = () => decideSite(b.dataset.ok, true));
+  $$('[data-no]').forEach(b => b.onclick = () => decideSite(b.dataset.no, false));
+  $('#sList').innerHTML = d.sites.length ? d.sites.map(x => `<div class="item"><div class="top"><span class="name">${esc(x.name)}</span><span class="muted small">${esc(x.size)}</span></div>
+    <div class="sub">${esc(x.user)} · ${when(x.updated)}</div><div class="sub"><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url.replace(/^https?:\/\//, ''))}</a></div>
+    <div class="acts"><button class="danger" data-un="${x.id}">Unpublish</button></div></div>`).join('') : '<p class="muted small">No published sites yet.</p>';
+  $$('[data-un]').forEach(b => b.onclick = async () => { const x = d.sites.find(s => String(s.id) === b.dataset.un); if (!confirm(`Take "${x.name}" by ${x.user} offline? They get a short text.`)) return; try { showSites(await POST('/api/sites/' + b.dataset.un + '/unpublish')); } catch (er) { msg($('#sMsg'), er.message); } });
+  sitesBadge(d.waiting.length);
+}
+async function loadSites() { try { showSites(await GET('/api/sites')); } catch (er) { msg($('#sMsg'), er.message); } }
+async function decideSite(id, yes) {
+  try { const r = await POST(`/api/sites/requests/${id}/${yes ? 'approve' : 'reject'}`); showSites(r); msg($('#sMsg'), yes ? 'Published. They got the link.' : 'Rejected. They were told.', true); }
+  catch (er) { msg($('#sMsg'), er.message); loadSites(); }
+}
+$('#sMode').onchange = () => { if (SITES) showSites({ ...SITES, settings: { ...SITES.settings, mode: $('#sMode').value } }); };
+$('#sSave').onclick = async () => {
+  try { showSites(await POST('/api/sites/settings', { approval: $('#sApproval').checked, mode: $('#sMode').value, quota_mb: $('#sQuota').value, max_sites: $('#sMax').value })); msg($('#sMsg'), 'Saved.', true); }
+  catch (er) { msg($('#sMsg'), er.message); }
+};
+
 // ---------------- settings ----------------
 async function loadSettings() {
   const d = await GET('/api/settings');
   $$('[data-s]', $('#setForm')).forEach(i => { const v = d.settings[i.dataset.s] ?? ''; if (i.type === 'checkbox') i.checked = v === '1'; else i.value = v; });
-  $('#adminPhones').value = d.admin_phones.join(', '); $('#pwUser').value = d.admin_username || 'admin';
+  $('#adminPhones').value = d.admin_phones.join(', '); if (d.portal_url) $('#portalUrl').textContent = d.portal_url; $('#pwUser').value = d.admin_username || 'admin';
   const a = await GET('/api/activity');
   $('#activity').innerHTML = a.items.map(x => `<div><span class="muted">${when(x.ts)}</span> <b>${esc(x.action)}</b> ${esc(x.detail)}</div>`).join('');
   const me = await GET('/api/me'); $('#ver').textContent = 'Message Assistant ' + me.version;
@@ -210,6 +246,8 @@ function showUpdates(u) {
   $('#updVer').textContent = `This server: ${u.current} · Latest: ${latest}` + (u.update_available ? ' · update available' : (u.latest ? ' · up to date' : ''));
   if ($('#updAuto')) $('#updAuto').checked = !!u.auto;
   $('#updNow').disabled = !!u.pending;
+  $('#updNotes').classList.toggle('hidden', !(u.update_available && u.notes));
+  $('#updNotes').textContent = u.update_available && u.notes ? 'What\'s new in ' + u.latest + ':\n' + u.notes : '';
   const l = u.last;
   $('#updLast').textContent = u.pending ? 'An update is starting…' : (l && l.at ? `Last update check: ${when(Date.parse(l.at))} — ${l.message || l.result}` : '');
 }
@@ -227,7 +265,7 @@ $('#updNow').onclick = async () => {
     const r = await POST('/api/update/now'); msg($('#updMsg'), r.words, true); $('#updNow').disabled = true;
     const was = (await GET('/api/update')).current; let n = 0;
     const t = setInterval(async () => {
-      n++; try { const u = await GET('/api/update'); if (!u.pending || u.current !== was || n > 60) { clearInterval(t); showUpdates(u); if (u.current !== was) msg($('#updMsg'), 'Updated to ' + u.current + '.', true); } } catch {}
+      n++; try { const u = await GET('/api/update/log'); if (u.log) { $('#updLog').classList.remove('hidden'); $('#updLog').textContent = u.log; $('#updLog').scrollTop = 1e9; } if (!u.pending || u.current !== was || n > 60) { clearInterval(t); showUpdates(u); if (u.current !== was) msg($('#updMsg'), 'Updated to ' + u.current + '.', true); } } catch {}
     }, 5000);
   } catch (er) { msg($('#updMsg'), er.message); }
 };

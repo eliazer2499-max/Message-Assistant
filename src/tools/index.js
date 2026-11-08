@@ -6,6 +6,9 @@ import { all, get, run, now, setting, log } from '../db.js';
 import { cfg } from '../config.js';
 import { addUsage, setUserSettings, userSettings } from '../users.js';
 import * as B from '../browser.js';
+import { SITE_TOOLS } from './sites.js';
+import { allowed as sitesAllowed } from '../sites.js';
+import { userById } from '../users.js';
 
 const S = (description, extra = {}) => ({ type: 'string', description, ...extra });
 const N = (description) => ({ type: 'number', description });
@@ -170,12 +173,17 @@ export const TOOLS = [
       return { saved: setUserSettings(ctx.userId, a) };
     } },
 ];
-export function declarations(list = TOOLS) {
-  return list.filter(t => !t.browser || setting('browser_enabled') === '1').map(t => ({ name: t.name, description: t.description, parameters: { type: 'object', properties: t.params || {}, required: t.required || [] } }));
+TOOLS.push(...SITE_TOOLS);     // 1.0.2
+
+/** The tools offered for one person (site tools only when the admin allows sites for them). */
+export function declarations(list = TOOLS, user = null) {
+  const sites = user ? sitesAllowed(user) : false;
+  return list.filter(t => (!t.browser || setting('browser_enabled') === '1') && (!t.site || sites)).map(t => ({ name: t.name, description: t.description, parameters: { type: 'object', properties: t.params || {}, required: t.required || [] } }));
 }
 export async function execTool(name, args, ctx) {
   const t = TOOLS.find(x => x.name === name);
   if (!t) return { error: `No tool named ${name}` };
+  if (t.site && !sitesAllowed(userById(ctx.userId))) return { error: 'Building sites is not turned on for this person. Tell them the admin can turn it on.' };
   try { return await t.run(args || {}, ctx); }
   catch (e) { log('tool', name, 'failed:', e.message); return { error: String(e.message || e).slice(0, 400) }; }
 }

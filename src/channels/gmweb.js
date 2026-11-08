@@ -37,6 +37,9 @@ export const SELECTORS = {
   qr: 'mw-qr-code img, mw-qr-code canvas, mw-qr-code, img[alt*="QR" i], canvas[aria-label*="QR" i]',
   useHere: 'button:has-text("Use here"), button:has-text("Use Here")',
   rememberToggle: 'mat-slide-toggle input, [role="switch"]',
+  // 1.0.2: pictures. A file box if the page has one, else the attach button's file chooser.
+  attachInput: 'mws-message-compose input[type="file"], input[type="file"][accept*="image" i], input[type="file"]',
+  attachButton: '[data-e2e-picker-button="ATTACHMENT"], button[aria-label*="Attach" i], button[aria-label*="Add media" i], button[aria-label*="file" i]',
 };
 export const TEXTS = {
   otherTab: /(open|opened|active) in (another|a different|other) (window|tab|browser)|use (messages )?here/i,
@@ -328,13 +331,19 @@ export class GoogleMessagesWeb extends EventEmitter {
   }
 
   // ---------- sending ----------
-  send({ convId = null, phone = null, text }) {
+  send({ convId = null, phone = null, text, media = null, mediaUrl = null }) {
     return this.enqueue('send', async () => {
       if (this.state !== 'connected') { const e = new Error('Messages is not connected (' + this.state + ')'); e.notConnected = true; throw e; }
       let id = convId;
       if (!id) id = await this.newChat(phone);
       await this.openChat(id);
-      for (const part of splitText(text)) await this.typeAndSend(part);
+      // 1.0.2: a picture first; if this page won't take it, its private link goes as text instead (never lost)
+      if (media) {
+        let ok = false;
+        try { await this.attachAndSend(media); ok = true; } catch (e) { this.lastAttachError = String(e.message || e).slice(0, 200); }
+        if (!ok && mediaUrl) text = (text ? text + '\n' : '') + mediaUrl;
+      }
+      for (const part of (text ? splitText(text) : [])) await this.typeAndSend(part);
       this.lastSent.set(id, String(text).slice(-200));
       // texts that came in while this chat was open (Google marks them read, so the list won't show them as new)
       const s = await this.snap();
@@ -362,6 +371,30 @@ export class GoogleMessagesWeb extends EventEmitter {
       if (!await this.waitOutgoing(before, 8000)) throw new Error('the message did not appear as sent');
     }
     await sleep(this.opts.betweenSendsMs ?? 700);
+  }
+  async attachAndSend(file) {
+    const outs = async () => (await this.snap()).msgs.filter(m => m.outgoing);
+    const before = await outs();
+    const lastId = before.length ? before[before.length - 1].id : '';
+    const input = this.page.locator(this.sel.attachInput).first();
+    if (await input.count()) await input.setInputFiles(file, { timeout: 8000 });
+    else {
+      const btn = this.page.locator(this.sel.attachButton).first();
+      if (!(await btn.count())) throw new Error('no attach button on this page');
+      const [chooser] = await Promise.all([this.page.waitForEvent('filechooser', { timeout: 8000 }), btn.click({ timeout: 5000 })]);
+      await chooser.setFiles(file);
+    }
+    await sleep(this.opts.attachWaitMs ?? 1500);
+    const send = this.page.locator(this.sel.sendButton).first();
+    if (await send.count()) await send.click({ timeout: 8000 }).catch(() => this.page.locator(this.sel.composer).first().press('Enter'));
+    else await this.page.locator(this.sel.composer).first().press('Enter');
+    const end = Date.now() + 25000;
+    while (Date.now() < end) {
+      const now = await outs();
+      if (now.length > before.length || (now.length && now[now.length - 1].id && now[now.length - 1].id !== lastId)) { await sleep(this.opts.betweenSendsMs ?? 700); return true; }
+      await sleep(400);
+    }
+    throw new Error('the picture did not appear as sent');
   }
   async waitOutgoing(before, ms) {
     const end = Date.now() + ms;

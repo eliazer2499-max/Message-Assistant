@@ -1,10 +1,11 @@
-// Message Assistant 1.0.1: self-update, the dashboard side.
+// Message Assistant: self-update, the dashboard side. MANUAL ONLY: nothing installs by itself.
 // The real work is done by root: /usr/local/sbin/messageassistant-update (written by install.sh), started
-//   - every ~6 hours by messageassistant-update.timer  → `messageassistant update --auto` (skips when Auto-update is off)
 //   - right away when this app writes <data>/update-request ("Update now"; messageassistant-update.path watches it)
 //   - by hand: sudo messageassistant update
-// The app only writes three small files in its data folder: auto-update ("on"/"off"), update-request, and it reads
-// update-status.json (written by the updater). It never runs anything as root.
+// There is no update timer (1.0.1 removed it). 1.0.2 adds a once-a-day CHECK in the app: it only shows a badge and
+// texts the admin once per new version (Settings can turn the text off); it never installs.
+// The app only writes small files in its data folder (update-request) and reads update-status.json / update.log
+// (written by the updater). It never runs anything as root.
 import fs from 'node:fs';
 import path from 'node:path';
 import { cfg, VERSION } from './config.js';
@@ -44,9 +45,10 @@ async function fetchLatest() {
     try {
       const r = await fetch(base + '/version.json', { headers: { 'Cache-Control': 'no-cache', 'User-Agent': 'messageassistant-updater' }, signal: AbortSignal.timeout(10000) });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      const v = String((await r.json())?.version || '').trim().replace(/^v/i, '');
+      const j = await r.json();
+      const v = String(j?.version || '').trim().replace(/^v/i, '');
       if (!/^\d+\.\d+\.\d+$/.test(v)) throw new Error('no version');
-      if (!best || newer(v, best.latest)) best = { latest: v, source: base };
+      if (!best || newer(v, best.latest)) best = { latest: v, source: base, notes: String(j.notes || '').slice(0, 4000), date: String(j.date || '').slice(0, 20) };
       if (newer(best.latest, VERSION)) break;
     } catch (e) { errors.push(base.replace(/^https?:\/\//, '') + ': ' + (e.message || e)); }
   }
@@ -58,7 +60,32 @@ export async function info({ fresh = false } = {}) {
   const last = lastRun();
   if (last && last.result === 'running' && Date.now() - Date.parse(last.at || 0) < 20 * 60 * 1000) pending = true;
   return {
-    current: VERSION, latest: cache.latest, update_available: !!cache.latest && newer(cache.latest, VERSION),
+    current: VERSION, latest: cache.latest, update_available: !!cache.latest && newer(cache.latest, VERSION), notes: cache.notes || '', date: cache.date || '',
     checked_at: cache.at, check_error: cache.error, auto: autoOn(), every_hours: 6, pending, last,
   };
 }
+
+// ---------- 1.0.2: the update log while it runs, a once-a-day check (badge + one optional text), never an install ----------
+export function logTail(lines = 40) {
+  try { const t = fs.readFileSync(f('update.log'), 'utf8'); return t.split('\n').slice(-lines).join('\n').replace(/[^\x09\x0a\x20-\x7e\u00a0-\uffff]/g, ''); } catch { return ''; }
+}
+/** For the dashboard's badge (from the last check; no network). */
+export function badge() { return { available: !!(cache && cache.latest && newer(cache.latest, VERSION)), latest: cache ? cache.latest : null }; }
+let dailyTimer = null;
+/** Once a day: check; when a NEW version shows up the first time, text the admin once (Settings can turn the text off). */
+export async function dailyCheck({ notify } = {}) {
+  const i = await info({ fresh: true });
+  if (!i.update_available) return { checked: true, available: false };
+  const { setting, setSetting } = await import('./db.js');
+  if (setting('update_notified') === i.latest) return { checked: true, available: true, notified: false };
+  setSetting('update_notified', i.latest);
+  if (setting('update_notify') !== '0' && notify) notify(`Message Assistant ${i.latest} is available (this server: ${VERSION}). To install: dashboard → Settings → Updates → Update now.`);
+  return { checked: true, available: true, notified: setting('update_notify') !== '0' };
+}
+export function startDailyCheck(notify, ms = 24 * 3600 * 1000) {
+  if (dailyTimer) return;
+  const go = () => dailyCheck({ notify }).catch(() => {});
+  setTimeout(go, cfg.testMode ? 10 : 5 * 60 * 1000).unref?.();
+  dailyTimer = setInterval(go, ms); dailyTimer.unref?.();
+}
+export function stopDailyCheck() { if (dailyTimer) clearInterval(dailyTimer); dailyTimer = null; }

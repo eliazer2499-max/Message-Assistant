@@ -88,8 +88,31 @@ sudo messageassistant users           # list; approve|block|remove <#>
 sudo messageassistant keys            # AI keys (masked) and their status
 sudo messageassistant admin-phone +1…
 sudo messageassistant reset-password
+sudo messageassistant check-update    # installed vs available (does not install)
+sudo messageassistant portal on|off|show          # people's own web chat at /me
+sudo messageassistant sites           # every published site; sites-unpublish <#|name>
+sudo messageassistant sites-approval on|off|show   # does the admin approve each publish?
+sudo messageassistant sites-access all|chosen|off  # who can build sites; sites-allow <#> / sites-deny <#>
+sudo messageassistant sites-limits 50 5            # MB and sites per person
 sudo messageassistant uninstall       # keeps data; add --purge to delete it
 ```
+
+## Web chat for each person (1.0.2)
+
+Approved people can open `https://<this address>/me`, type their phone number and the 6-digit code that is texted to them, and see their own chat (texts, pictures, site links) and chat from there. What they type there is answered there **and** texted to their phone; what they text from the phone shows up there. Only their own chat, ever; the sign-in never opens the admin dashboard. 30-day sign-in, one code a minute, 5 an hour. Turn it off in Settings or with `sudo messageassistant portal off` (everyone is signed out).
+
+## Websites (1.0.2)
+
+Approved people can ask for a simple website ("make me a page for my bakery"). The assistant writes the HTML, CSS and JavaScript in that person's **own** folder (`/var/lib/messageassistant/workspaces/<#>/`; nobody can read or touch anyone else's), and sends a phone-size **picture** of the page with 1–2 lines, never code (code only when asked, as a file).
+
+To put it online the person gets **one** question with the link (`Reply YES to publish`; a code like `S12` only when two are waiting; a new request for the same site replaces the old one; it runs out after 30 min).
+
+- **Site publishing (Dashboard → Sites, or `sites-approval on|off`)**: **off** (default) = the person's YES publishes. **On** = after their YES you get the name, the site, a picture and a private preview link by text and on the Sites page; reply **YES** or **NO** (or tap Approve / Reject). They are told "Waiting for admin approval" once, then the outcome. Your own sites skip the queue.
+- **Who can build**: everyone (default), only chosen people, or nobody.
+- **Limits**: 50 MB per person (their files + their published sites) and 5 sites per person by default.
+- Sites are at `https://<this address>/sites/<name><#>-<site>/` (e.g. `/sites/moshe7-bakery/`), with a "Page not found" page (or the site's own `404.html`). They are served by this app behind Caddy, so nothing in Caddy changes. Every site page runs sealed off from the dashboard (a sandbox policy), so a site's JavaScript can never read your sign-in. (Because of that seal, a site can't use browser storage like localStorage.)
+- **Sites page**: every published site (person, name, link, size, date) with **Unpublish** (the person gets a short text).
+- Pictures need the server's Chromium (installed with the app). If Google's page won't take a picture, the private link to it is sent instead.
 
 ## Updates (only when you ask)
 
@@ -103,7 +126,8 @@ Nothing updates by itself. Press **Update now** in Dashboard → Settings → Up
 
 It never changes `/etc/messageassistant/env`, the Caddy files or your data, and it repairs the service file if `ExecStart` was changed by hand.
 Dashboard → **Settings → Updates** shows this server's version and the latest, with **Update now** and **Check again**.
-Logs: `sudo messageassistant logs` (or `journalctl -u messageassistant-update`).
+Logs: `sudo messageassistant logs` (or `journalctl -u messageassistant-update`). While it runs, the dashboard shows the update log live.
+Once a day the app only *checks*: a new version shows as "update available" and you get one short text (Settings → "Text me when a new version is out" turns the text off). It never installs by itself.
 
 From 1.0.0: type `sudo messageassistant update` once; after that you can update from the dashboard. See CHANGELOG.md.
 
@@ -116,7 +140,7 @@ A daily copy is made automatically (7 kept) in `/var/lib/messageassistant/backup
 | | |
 |---|---|
 | App | `/opt/messageassistant/current` (3 releases kept) |
-| Data | `/var/lib/messageassistant` (database, master.key, gm-profile, browser-users, backups) |
+| Data | `/var/lib/messageassistant` (database, master.key, gm-profile, browser-users, backups, workspaces, sites) |
 | Settings | `/etc/messageassistant/env` |
 | Service | `messageassistant.service`, port 8788 on 127.0.0.1, behind Caddy |
 | Chromium | `/opt/messageassistant-browser` |
@@ -133,6 +157,6 @@ A daily copy is made automatically (7 kept) in `/var/lib/messageassistant/backup
 ```
 npm test
 ```
-Unit tests: approval flow, admin code + password login and rate limits, per-user isolation, the key chain (12 fake keys, limits, cooldown, return, all-busy queue), message routing with a mocked Messages channel, the browser queue and safety. With Playwright and a Chromium available (`MSA_PLAYWRIGHT_PATH=…/playwright-core/index.mjs MSA_CHROMIUM=…/chrome npm test`) the real Messages driver and a full end-to-end round trip run against a stand-in Messages page.
+Unit tests: websites (isolation incl. ../ tricks, limits, one YES, admin approval YES/NO, 404, unpublish), the updater (no downgrade, sha256, failed install), approval flow, admin code + password login and rate limits, per-user isolation, the key chain (12 fake keys, limits, cooldown, return, all-busy queue), message routing with a mocked Messages channel, the browser queue and safety. With Playwright and a Chromium available (`MSA_PLAYWRIGHT_PATH=…/playwright-core/index.mjs MSA_CHROMIUM=…/chrome npm test`) the real Messages driver and a full end-to-end round trip run against a stand-in Messages page.
 
 **Only a real paired account can test:** that Google's real Messages page matches the driver's selectors (chat list, unread marks, message ids, the text box, starting a new chat), Google's sign-in from the server, QR / phone pairing, how long the pairing lasts, and RCS delivery itself.

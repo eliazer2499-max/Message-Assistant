@@ -163,3 +163,51 @@ export async function el(page, n) {
   return loc;
 }
 export async function settle(page) { await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {}); await sleep(cfg.testMode ? 50 : 800); }
+
+// ---------- 1.0.2: a phone-size picture of a site folder (the person's project, or a staged site) ----------
+// The folder is served to the page from disk at https://site.preview/… (nothing is put online for it); requests to
+// private addresses are blocked like everywhere else. It waits ~2.5 s after loading so a splash/loading logo is gone.
+export const PHONE = { width: 390, height: 844 };
+const PREVIEW_ORIGIN = 'https://site.preview';
+const MIME = { '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.ico': 'image/x-icon',
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.txt': 'text/plain; charset=utf-8', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg' };
+function fileFor(dir, urlPath) {
+  let parts; try { parts = decodeURIComponent(urlPath).split('/').filter(Boolean); } catch { return null; }
+  if (parts.some(p => p === '..' || p.startsWith('.') || p.includes('\\') || p.includes('\0'))) return null;
+  let f = path.join(dir, ...parts);
+  try {
+    const real = fs.realpathSync(f), root = fs.realpathSync(dir);
+    if (real !== root && !real.startsWith(root + path.sep)) return null;
+    if (fs.statSync(real).isDirectory()) f = path.join(real, 'index.html'); else f = real;
+    return fs.statSync(f).isFile() ? f : null;
+  } catch { return null; }
+}
+export async function shootFolder(userId, dir, { page: rel = '', full = false, waitMs = null } = {}) {
+  return inBrowserQueue(userId, async () => {
+    const b = await getBrowser();
+    const ctx = await b.newContext({ viewport: PHONE, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'en-US',
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36' });
+    try {
+      await ctx.route('**/*', async (r) => {
+        const u = r.request().url();
+        if (u.startsWith(PREVIEW_ORIGIN + '/')) {
+          const f = fileFor(dir, new URL(u).pathname);
+          if (!f) return r.fulfill({ status: 404, contentType: 'text/html', body: '<h1>Page not found</h1>' });
+          return r.fulfill({ status: 200, contentType: MIME[path.extname(f).toLowerCase()] || 'application/octet-stream', body: fs.readFileSync(f) });
+        }
+        if (/^https?:\/\/(localhost|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|0\.0\.0\.0|\[::1\])/i.test(u) && !(cfg.testMode && process.env.MSA_ALLOW_LOCAL === '1')) return r.abort();
+        return r.continue();
+      });
+      const page = await ctx.newPage();
+      page.setDefaultTimeout(30000);
+      await page.goto(PREVIEW_ORIGIN + '/' + String(rel || '').replace(/^\/+/, ''), { waitUntil: 'load', timeout: 30000 }).catch(() => {});
+      await sleep(waitMs ?? (cfg.testMode ? 100 : 2500));
+      const png = await page.screenshot({ type: 'png', fullPage: !!full, timeout: 20000 });
+      return Buffer.from(png);
+    } finally {
+      await ctx.close().catch(() => {});
+      if (!users.size && running <= 1 && browser) { const bb = browser; browser = null; await bb.close().catch(() => {}); }
+    }
+  });
+}

@@ -332,7 +332,7 @@ WantedBy=multi-user.target
 EOF
 write_file /usr/local/bin/messageassistant 755 root:root <<'EOF'
 #!/usr/bin/env bash
-# Message Assistant helper. Usage: sudo messageassistant {status|url|logs|restart|update|version|backup|reset-password|admin-phone|users|approve|block|remove|keys|uninstall}
+# Message Assistant helper. Usage: sudo messageassistant {status|url|logs|restart|update|check-update|version|backup|reset-password|admin-phone|users|approve|block|remove|keys|sites|sites-approval|sites-access|sites-allow|sites-deny|sites-limits|sites-unpublish|portal|uninstall}
 set -euo pipefail
 DATA=/var/lib/messageassistant
 cli() { cd /tmp && set -a && . /etc/messageassistant/env && set +a && runuser -u messageassistant -- node --disable-warning=ExperimentalWarning /opt/messageassistant/current/src/cli.js "$@"; }
@@ -347,9 +347,9 @@ case "${1:-status}" in
   version) echo "Installed: $(cat /opt/messageassistant/current/VERSION)"; echo "Updates: only when you press Update now (dashboard) or run: sudo messageassistant update"
            [ -f $DATA/update-status.json ] && echo "Last check: $(cat $DATA/update-status.json)" || true;;
   backup) f="$DATA/backups/manual-$(date +%Y%m%d-%H%M%S).db"; mkdir -p "$DATA/backups"; chown messageassistant:messageassistant "$DATA/backups"; cd /tmp && runuser -u messageassistant -- node --disable-warning=ExperimentalWarning -e "const {DatabaseSync}=require('node:sqlite');new DatabaseSync('$DATA/messageassistant.db').exec(\"VACUUM INTO '$f'\")" && echo "Saved $f (keep master.key with it: $DATA/master.key)";;
-  reset-password|admin-phone|users|approve|block|remove|keys|has-password) shift_cmd="$1"; shift; cli "$shift_cmd" "$@";;
+  reset-password|admin-phone|users|approve|block|remove|keys|has-password|sites|sites-approval|sites-access|sites-allow|sites-deny|sites-limits|sites-unpublish|check-update|portal) shift_cmd="$1"; shift; cli "$shift_cmd" "$@";;
   uninstall) bash /opt/messageassistant/current/uninstall.sh "${2:-}";;
-  *) echo "Usage: sudo messageassistant {status|url|logs|restart|update|version|backup|reset-password [new]|admin-phone +1...|users|approve <#>|block <#>|remove <#>|keys|uninstall [--purge]}";;
+  *) echo "Usage: sudo messageassistant {status|url|logs|restart|update|check-update|version|backup|reset-password [new]|admin-phone +1...|users|approve <#>|block <#>|remove <#>|keys|sites|sites-approval on|off|show|sites-access all|chosen|off|sites-allow <#>|sites-deny <#>|sites-limits [MB] [sites]|sites-unpublish <#|name>|portal on|off|show|uninstall [--purge]}";;
 esac
 EOF
 

@@ -7,11 +7,12 @@ import { userById, userByPhone } from './users.js';
 let channel = null, timer = null, busy = false, onFail = null;
 export const PRIORITY = { code: 0, admin: 1, reply: 5, busy: 4, waiting: 6, welcome: 5, reminder: 5, notice: 6 };
 export function attachChannel(ch, { onFailed } = {}) { channel = ch; onFail = onFailed || null; }
-export function enqueueText({ userId = null, toPhone = null, convId = null, text, kind = 'reply', priority = null }) {
-  if (!text || !String(text).trim()) return null;
+// 1.0.2: media = a picture/file on this server to attach (mediaUrl = its private link, sent instead if attaching fails)
+export function enqueueText({ userId = null, toPhone = null, convId = null, text, kind = 'reply', priority = null, media = null, mediaUrl = null }) {
+  if ((!text || !String(text).trim()) && !media) return null;
   const u = userId ? userById(userId) : null;
-  const r = run('INSERT INTO outbox(user_id, to_phone, conv_id, text, kind, priority, status, created) VALUES(?,?,?,?,?,?,?,?)',
-    userId, toPhone || (u && !u.phone.startsWith('conv:') ? u.phone : null), convId || (u ? u.conv_id : null), String(text), kind, priority ?? PRIORITY[kind] ?? 5, 'queued', now());
+  const r = run('INSERT INTO outbox(user_id, to_phone, conv_id, text, kind, priority, status, created, media, media_url) VALUES(?,?,?,?,?,?,?,?,?,?)',
+    userId, toPhone || (u && !u.phone.startsWith('conv:') ? u.phone : null), convId || (u ? u.conv_id : null), String(text || '').trim(), kind, priority ?? PRIORITY[kind] ?? 5, 'queued', now(), media, mediaUrl);
   setImmediate(drain);
   return Number(r.lastInsertRowid);
 }
@@ -32,7 +33,7 @@ export async function drain() {
         const known = !u && m.to_phone ? userByPhone(m.to_phone) : null;      // e.g. the admin, who also texts the assistant
         const convId = (u && u.conv_id) || m.conv_id || (known && known.conv_id) || null;
         const phone = m.to_phone || (u && !u.phone.startsWith('conv:') ? u.phone : null);
-        const r = await channel.send({ convId, phone, text: m.text });
+        const r = await channel.send({ convId, phone, text: m.text, ...(m.media ? { media: m.media, mediaUrl: m.media_url } : {}) });
         run("UPDATE outbox SET status='sent', sent_at=?, conv_id=? WHERE id=?", now(), r.convId || convId, m.id);
         if (u && r.convId && !u.conv_id) run('UPDATE users SET conv_id=? WHERE id=?', String(r.convId), u.id);
       } catch (e) {
@@ -50,4 +51,4 @@ export async function drain() {
   } finally { busy = false; }
 }
 export function recoverOutbox() { run("UPDATE outbox SET status='queued' WHERE status='sending'"); }
-export function recent(limit = 50) { return all('SELECT id, user_id, kind, status, tries, created, sent_at, error, substr(text,1,120) AS text FROM outbox ORDER BY id DESC LIMIT ?', limit); }
+export function recent(limit = 50) { return all('SELECT id, user_id, kind, status, tries, created, sent_at, error, CASE WHEN media IS NOT NULL THEN \'[picture] \' ELSE \'\' END || substr(text,1,120) AS text FROM outbox ORDER BY id DESC LIMIT ?', limit); }

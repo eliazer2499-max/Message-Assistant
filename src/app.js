@@ -10,6 +10,11 @@ import { handleIncoming } from './router.js';
 import { recoverJobs, pump } from './agent.js';
 import { startScheduler, stopScheduler } from './scheduler.js';
 import { MockChannel } from './channels/mock.js';
+import { startDailyCheck, stopDailyCheck } from './updates.js';
+import { adminPhones } from './users.js';
+import { enqueueText } from './outbox.js';
+import * as SITES from './sites.js';
+import './siteflow.js';
 
 export const STATE_WORDS = {
   connected: 'Connected', pairing: 'Waiting for pairing (scan the QR code / confirm on the phone)', signed_out: 'Not signed in to Google',
@@ -68,5 +73,8 @@ export async function startApp({ channel: given = null, env = process.env, start
   });
   if (start && cfg.channel !== 'off') await channel.start();
   startOutbox(cfg.testMode ? 50 : 3000); startScheduler(cfg.testMode ? 100 : cfg.tickMs); pump();
-  return { channel, stop: async () => { stopOutbox(); stopScheduler(); await channel.stop().catch(() => {}); } };
+  // 1.0.2: a once-a-day update check (a badge + one text to the admin; it never installs), site request expiry
+  if (!cfg.testMode) startDailyCheck((text) => { for (const p of adminPhones()) enqueueText({ toPhone: p, text, kind: 'admin' }); });
+  const siteTimer = setInterval(() => { try { SITES.expire(); SITES.cleanMedia(); } catch (e) { log('sites', 'tidy failed:', e.message); } }, cfg.testMode ? 200 : 5 * 60000); siteTimer.unref?.();
+  return { channel, stop: async () => { stopOutbox(); stopScheduler(); stopDailyCheck(); clearInterval(siteTimer); await channel.stop().catch(() => {}); } };
 }
