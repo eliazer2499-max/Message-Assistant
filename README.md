@@ -30,10 +30,11 @@ My Assistant keeps working as before: Message Assistant only *adds* its own site
 
 You need: the phone with RCS that will be the assistant's number, and the Google account on it.
 
-1. Open the dashboard → **Connect**. You see the server's own browser, live.
-2. Tap **Sign in** in the picture and sign in with that phone's Google account. Tap a box in the picture, type in the box under it, press **Send keys**, then **Enter**. (What you type goes straight to the browser; it is not saved or logged.)
-3. On the phone: Google Messages → profile picture → **Device pairing**. Scan the QR code shown in the dashboard, or confirm on the phone if it asks.
-4. When the browser shows the list of chats, the top of the dashboard turns green: **Connected**.
+1. Open the dashboard → **Connect** and tap **Start pairing**. The QR code shows right there, and it refreshes by itself.
+2. On the phone: Google Messages → profile picture → **Device pairing** → **QR code scanner**. Scan the code.
+3. When the dashboard says **Paired ✓**, you're done.
+
+The first time, Google may want the phone's Google account signed in before it shows the QR code. If so, the dashboard says so and opens the server's browser live: tap a box in the picture, type in the box under it, press **Send keys**, then **Enter**. (What you type goes straight to the browser; it is not saved or logged.) The QR code shows right after. Since 1.0.4 the server uses the full browser, which Google accepts for this sign-in (1.0.3's lighter browser got "This browser or app may not be secure").
 
 It stays paired across restarts and updates. If the connection drops (phone off, signed out, opened somewhere else), the dashboard shows a red banner, texts wait in a queue (none are lost), and you get an alert (see *Alerts*). The assistant presses "Use here" by itself if Messages was opened in another browser.
 

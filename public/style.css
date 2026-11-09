@@ -86,3 +86,12 @@ body.me #app.hidden{display:none}
 /* 1.0.3: the logo stays small even if the phone kept an old style or picture (1.0.2 showed it full width) */
 img.logo{flex:none;object-fit:contain}header img.logo{width:28px;height:28px;max-width:28px}
 .card img{max-width:100%}
+
+/* 1.0.4: pairing straight to the QR code */
+.qrbig { text-align:center; margin:10px 0; }
+.qrbig img { width:min(280px, 80vw); height:auto; image-rendering:pixelated; background:#fff; padding:12px; border:1px solid var(--line); border-radius:12px; }
+.paired { display:flex; flex-direction:column; gap:4px; padding:12px 14px; margin:10px 0; border-radius:12px; border:1px solid var(--ok); color:var(--ok); }
+.paired b { font-size:20px; }
+.paired .muted { color:var(--muted, inherit); }
+details.card > summary { cursor:pointer; font-weight:700; padding:2px 0 8px; }
+details.card:not([open]) > summary { padding-bottom:2px; }

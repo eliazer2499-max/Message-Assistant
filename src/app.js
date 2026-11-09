@@ -17,7 +17,8 @@ import * as SITES from './sites.js';
 import './siteflow.js';
 
 export const STATE_WORDS = {
-  connected: 'Connected', pairing: 'Waiting for pairing (scan the QR code / confirm on the phone)', signed_out: 'Not signed in to Google',
+  connected: 'Paired ✓ Connected', pairing: 'Ready to pair: scan the QR code with the phone', signed_out: "Google wants the phone's Google account signed in once",
+  signin_blocked: "Google refused the sign-in from the server's browser",
   phone_offline: 'Phone not reachable', other_tab: 'Open in another browser', error: 'Browser problem', unknown: 'Checking…', starting: 'Starting…', stopped: 'Stopped', not_started: 'Not started',
 };
 export let channel = null;
@@ -58,7 +59,7 @@ export async function startApp({ channel: given = null, env = process.env, start
       clearTimeout(dropTimer); dropTimer = null;
       if (droppedAlerted) { droppedAlerted = false; alert('info', 'Google Messages is connected again. Waiting texts are going out now.', { key: 'gm-back' }); }
       drain();
-    } else if (!dropTimer && (prev === 'connected' || state === 'signed_out' || state === 'pairing' || state === 'error')) {
+    } else if (!dropTimer && (prev === 'connected' || state === 'signed_out' || state === 'signin_blocked' || state === 'pairing' || state === 'error')) {
       // a short blip is normal; the admin hears about it if it lasts a minute
       dropTimer = setTimeout(() => {
         dropTimer = null;

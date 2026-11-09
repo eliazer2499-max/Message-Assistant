@@ -5,10 +5,17 @@
 // default 4 s) with one page.evaluate, and a chat is only opened when its preview changed or it is unread.
 //
 // Pairing (Google changed this in 2025-26): messages.google.com/web now starts with "Sign in" (a Google account),
-// then pairs with the phone (QR code or a confirmation on the phone). The dashboard shows this browser live
-// (a picture refreshed every second or two) and passes the admin's taps and typing to it, so he can sign in, scan the
-// QR code or answer any prompt himself. The profile (cookies) is kept in <dataDir>/gm-profile, so it stays paired
-// across restarts.
+// then pairs with the phone (QR code or a confirmation on the phone). Checked live on 2026-11-08: every pairing page
+// (/web/authentication, /web/pair, /web/conversations) sends a browser that is not signed in to /web/welcome, which
+// only offers "Sign in"; there is no QR without the account any more.
+// 1.0.4: Google refuses that sign-in ("This browser or app may not be secure") from Playwright's stripped-down
+// "headless shell" whatever user agent it claims, and accepts the full Chromium build running headless with a normal
+// Chrome user agent. So the driver always launches the full build (pickBrowser) and, once signed in, goes straight to
+// the QR code: it picks "QR code" when the page offers a choice, turns "Remember this computer" on, re-reads the QR
+// every few seconds (Google rotates it) and reports "Paired ✓" the moment the chats list appears.
+// The dashboard shows this browser live (a picture refreshed every second or two) and passes the admin's taps and
+// typing to it, for the one-time Google sign-in. The profile (cookies) is kept in <dataDir>/gm-profile, so it stays
+// paired across restarts.
 //
 // Google's page can change. Every CSS selector lives in SELECTORS below, and <dataDir>/gm-selectors.json (same keys)
 // overrides them without a new release.
@@ -37,6 +44,11 @@ export const SELECTORS = {
   qr: 'mw-qr-code img, mw-qr-code canvas, mw-qr-code, img[alt*="QR" i], canvas[aria-label*="QR" i]',
   useHere: 'button:has-text("Use here"), button:has-text("Use Here")',
   rememberToggle: 'mat-slide-toggle input, [role="switch"]',
+  // 1.0.4: the QR page. "Pair with QR code" when Google offers it next to pairing with the Google account; the
+  // refresh button when a QR code has run out; the welcome page's "Sign in" button.
+  qrChoice: 'button:has-text("QR code"), a:has-text("QR code"), [role="tab"]:has-text("QR"), [role="button"]:has-text("QR code"), [role="radio"]:has-text("QR")',
+  qrRefresh: 'mw-qr-code button, button:has-text("Refresh"), button:has-text("Generate new"), button:has-text("Try again"), button:has-text("Retry")',
+  signInButton: 'button:has-text("Sign in"), a:has-text("Sign in"), button:has-text("Sign In")',
   // 1.0.2: pictures. A file box if the page has one, else the attach button's file chooser.
   attachInput: 'mws-message-compose input[type="file"], input[type="file"][accept*="image" i], input[type="file"]',
   attachButton: '[data-e2e-picker-button="ATTACHMENT"], button[aria-label*="Attach" i], button[aria-label*="Add media" i], button[aria-label*="file" i]',
@@ -46,7 +58,33 @@ export const TEXTS = {
   phoneOff: /trying to (reach|connect to) (your )?phone|phone (is |isn't |is not )?(offline|not connected|disconnected)|check (your )?phone'?s? (connection|internet)|can'?t (reach|connect to) (your )?phone|reconnecting to (your )?phone/i,
   pairing: /scan (this|the) (qr )?code|pair with qr|pair your (phone|device)|device pairing|use your phone to scan|pair(ing)? (this )?(computer|browser)/i,
   signedOut: /^\s*sign in\b|welcome to google messages|sign in to (continue|messages)/im,
+  signinBlocked: /this browser or app may not be secure|couldn.t sign you in/i,
 };
+
+/** 1.0.4: which Chromium to start. Never the "headless shell" when the full build is there (Google refuses sign-in
+ *  from the shell). configured = MSA_CHROMIUM; browsersPath = PLAYWRIGHT_BROWSERS_PATH (the installer's folder). */
+export function isHeadlessShell(p) { return /headless[_-]?shell/i.test(String(p || '')); }
+export function findFullChromium(root = process.env.PLAYWRIGHT_BROWSERS_PATH) {
+  if (!root) return null;
+  let dirs = [];
+  try { dirs = fs.readdirSync(root).filter(d => /^chromium-\d+$/.test(d)).sort((a, b) => Number(b.slice(9)) - Number(a.slice(9))); } catch { return null; }
+  for (const d of dirs) for (const sub of ['chrome-linux64', 'chrome-linux', 'chrome-mac/Chromium.app/Contents/MacOS']) {
+    const p = path.join(root, d, sub, sub.startsWith('chrome-mac') ? 'Chromium' : 'chrome');
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+export function pickBrowser({ configured = '', browsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH } = {}) {
+  const full = findFullChromium(browsersPath);
+  if (configured && !isHeadlessShell(configured)) return { executablePath: configured, kind: 'full', why: 'MSA_CHROMIUM' };
+  if (full) return { executablePath: full, kind: 'full', why: configured ? 'MSA_CHROMIUM is the headless shell; using the full build next to it' : 'the installed full build' };
+  if (configured) return { executablePath: configured, kind: 'shell', why: 'MSA_CHROMIUM (headless shell; Google may refuse the sign-in)' };
+  return { channel: 'chromium', kind: 'full', why: "Playwright's full Chromium" };
+}
+/** A normal Chrome user agent: no "HeadlessChrome", and the reduced version Chrome itself sends (153.0.0.0). */
+export function normalUserAgent(ua) {
+  return String(ua || '').replace(/HeadlessChrome/g, 'Chrome').replace(/Chrome\/(\d+)\.\d+\.\d+\.\d+/, 'Chrome/$1.0.0.0');
+}
 const VIEW = { width: 1100, height: 800 };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const PRIO = { send: 0, input: 1, screen: 2, health: 3, poll: 4 };
@@ -96,6 +134,7 @@ function snapshotScript(sel) {
 export function classifyPage(snap, sel = SELECTORS) {
   const url = String(snap.url || '');
   const body = String(snap.body || '');
+  if (/accounts\.google\.com\/.*signin\/rejected/.test(url) || (/accounts\.google\.com/.test(url) && TEXTS.signinBlocked.test(body))) return { state: 'signin_blocked', detail: 'Google refused the sign-in from this browser' };
   if (/accounts\.google\.com/.test(url)) return { state: 'signed_out', detail: 'Google sign-in page' };
   if (TEXTS.otherTab.test(body) && !snap.convs.length) return { state: 'other_tab', detail: 'Messages is open somewhere else' };
   if (/\/web\/(authentication|pair)/.test(url) || snap.hasQr || (TEXTS.pairing.test(body) && !snap.convs.length)) return { state: 'pairing', detail: 'waiting for the phone to pair' };
@@ -134,6 +173,8 @@ export class GoogleMessagesWeb extends EventEmitter {
     this.lastSent = new Map();      // convId → last text we sent (our own message is not "new")
     this.timers = []; this.stopped = true; this.launchFails = 0; this.unknownSince = 0; this.lastUseHere = 0;
     this.pollMs = opts.pollMs || cfg.pollMs; this.healthMs = opts.healthMs || cfg.healthMs;
+    this.qrMs = opts.qrMs || Number(process.env.MSA_QR_MS) || 3000;   // 1.0.4: while pairing, the QR is re-read this often
+    this.qrData = null; this.qrAt = 0; this.pairedAt = 0; this.browser = null;
     this.url = opts.url || cfg.gmUrl;
   }
 
@@ -144,6 +185,8 @@ export class GoogleMessagesWeb extends EventEmitter {
     const quiet = (what) => (e) => { if (!this.stopped) log('gm', what, 'failed:', String(e.message).slice(0, 200)); };
     this.timers.push(setInterval(() => this.enqueue('health', () => this.health(), { dedupe: true, noEnsure: true }).catch(quiet('health')), this.healthMs));
     this.timers.push(setInterval(() => { if (this.state === 'connected') this.enqueue('poll', () => this.poll(), { dedupe: true }).catch(quiet('poll')); }, this.pollMs));
+    // 1.0.4: while the QR code is up, look every few seconds: Google rotates the code, and "Paired ✓" should show at once
+    this.timers.push(setInterval(() => { if (this.state === 'pairing') this.enqueue('health', () => this.health(), { dedupe: true, noEnsure: true }).catch(quiet('pairing check')); }, this.qrMs));
     this.enqueue('health', () => this.health(), { dedupe: true, noEnsure: true }).catch(quiet('health'));
   }
   async stop() {
@@ -164,26 +207,40 @@ export class GoogleMessagesWeb extends EventEmitter {
     const pw = await this.playwright();
     fs.mkdirSync(this.profileDir, { recursive: true, mode: 0o700 });
     for (const f of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) { try { fs.rmSync(path.join(this.profileDir, f), { force: true }); } catch {} }
+    // 1.0.4: the full Chromium build (pickBrowser), never the headless shell Google refuses to sign in from
+    this.browser = this.opts.launch?.executablePath ? { executablePath: this.opts.launch.executablePath, kind: isHeadlessShell(this.opts.launch.executablePath) ? 'shell' : 'full', why: 'test' }
+      : pickBrowser({ configured: cfg.chromium });
     const launch = {
       headless: true, viewport: VIEW, locale: 'en-US',
       ignoreDefaultArgs: ['--enable-automation'],
-      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled', '--no-first-run', '--no-default-browser-check', '--mute-audio'],
-      ...(cfg.chromium ? { executablePath: cfg.chromium } : {}),
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled', '--no-first-run', '--no-default-browser-check', '--mute-audio', '--lang=en-US'],
+      ...(this.browser.executablePath ? { executablePath: this.browser.executablePath } : { channel: this.browser.channel }),
       ...(this.opts.launch || {}),
     };
     if (this.ua) launch.userAgent = this.ua;
-    this.ctx = await pw.chromium.launchPersistentContext(this.profileDir, launch);
+    try { this.ctx = await pw.chromium.launchPersistentContext(this.profileDir, launch); }
+    catch (e) {
+      if (!launch.channel) throw e;
+      // no full build where Playwright looks: fall back to its default (the shell) rather than not starting at all
+      log('gm', 'full Chromium did not start (' + String(e.message).split('\n')[0].slice(0, 120) + '); using the default browser');
+      delete launch.channel; this.browser = { kind: 'shell', why: 'fallback: the full build is not installed' };
+      this.ctx = await pw.chromium.launchPersistentContext(this.profileDir, launch);
+    }
+    if (!this.loggedBrowser) { this.loggedBrowser = true; log('gm', `browser: ${this.browser.kind === 'full' ? 'full Chromium' : 'headless shell'} (${this.browser.why})`); }
     this.page = this.ctx.pages()[0] || await this.ctx.newPage();
     if (!this.ua && !launch.userAgent) {
-      // headless Chromium calls itself "HeadlessChrome"; Google Messages gets the normal Chrome name instead
+      // headless Chromium calls itself "HeadlessChrome"; Google gets the normal Chrome name instead
       const ua = await this.page.evaluate(() => navigator.userAgent).catch(() => '');
-      if (/HeadlessChrome/.test(ua)) {
-        this.ua = ua.replace(/HeadlessChrome/g, 'Chrome');
+      const normal = normalUserAgent(ua);
+      if (ua && normal !== ua) {
+        this.ua = normal;
         await this.ctx.close().catch(() => {});
         this.ctx = await pw.chromium.launchPersistentContext(this.profileDir, { ...launch, userAgent: this.ua });
         this.page = this.ctx.pages()[0] || await this.ctx.newPage();
       } else this.ua = ua || null;
     }
+    // looks like a person's browser where that is cheap: no webdriver flag
+    await this.ctx.addInitScript(() => { try { Object.defineProperty(Navigator.prototype, 'webdriver', { get: () => false, configurable: true }); } catch {} }).catch(() => {});
     this.page.on('crash', () => { log('gm', 'page crashed'); this.page = null; });
     this.ctx.on('close', () => { this.ctx = null; this.page = null; });
     this.page.setDefaultTimeout(20000);
@@ -234,10 +291,15 @@ export class GoogleMessagesWeb extends EventEmitter {
     const prev = this.state;
     if (prev === state && detail === this.detail) return;
     if (prev !== state) this.since = Date.now();
+    if (state === 'connected' && prev !== 'connected' && ['pairing', 'signed_out', 'signin_blocked'].includes(prev)) this.pairedAt = Date.now();
+    if (state !== 'pairing') { this.qrData = null; this.qrAt = 0; }
     this.state = state; this.detail = detail;
     if (prev !== state) { log('gm', `state ${prev} → ${state}${detail ? ' (' + detail + ')' : ''}`); this.emit('state', { state, prev, detail }); }
   }
-  status() { return { state: this.state, since: this.since, detail: this.detail, qr: this.qrData || null, driver: 'google-messages-web', queue: this.queue.length }; }
+  status() {
+    return { state: this.state, since: this.since, detail: this.detail, qr: this.qrData || null, qrAt: this.qrAt || null, pairedAt: this.pairedAt || null,
+      browser: this.browser ? this.browser.kind : null, driver: 'google-messages-web', queue: this.queue.length };
+  }
   async snap() { return this.page.evaluate(snapshotScript, this.sel); }
 
   async health() {
@@ -245,13 +307,21 @@ export class GoogleMessagesWeb extends EventEmitter {
     try { await this.ensureBrowser(); }
     catch (e) { this.launchFails++; this.setState('error', 'browser did not start: ' + String(e.message).slice(0, 160)); return; }
     let s;
-    try { s = await this.snap(); } catch (e) { this.setState('error', 'page not readable: ' + String(e.message).slice(0, 120)); await this.closeBrowser(); return; }
+    try { s = await this.snap(); }
+    catch (e) {
+      // 1.0.4: the page was just moving (e.g. to the chats right after the QR scan): look again instead of restarting
+      if (/context was destroyed|navigat|Target page.*closed/i.test(String(e.message)) && this.page && !this.page.isClosed()) {
+        await this.page.waitForLoadState('domcontentloaded').catch(() => {}); await sleep(800);
+        try { s = await this.snap(); } catch {}
+      }
+      if (!s) { this.setState('error', 'page not readable: ' + String(e.message).slice(0, 120)); await this.closeBrowser(); return; }
+    }
     const c = classifyPage(s, this.sel);
     if (c.state === 'other_tab' && Date.now() - this.lastUseHere > 5 * 60000) {
       this.lastUseHere = Date.now();
       try { await this.page.locator(this.sel.useHere).first().click({ timeout: 5000 }); log('gm', 'pressed "Use here"'); await sleep(2000); return this.health(); } catch {}
     }
-    if (c.state === 'pairing') await this.readQr(); else this.qrData = null;
+    if (c.state === 'pairing') { await this.straightToQr(s); await this.readQr(); } else { this.qrData = null; this.qrAt = 0; }
     if (c.state === 'unknown') {
       if (!this.unknownSince) this.unknownSince = Date.now();
       if (Date.now() - this.unknownSince > 3 * 60000) { log('gm', 'page unclear for 3 min; reloading'); this.unknownSince = 0; await this.page.goto(this.url + '/conversations', { waitUntil: 'domcontentloaded' }).catch(() => {}); }
@@ -264,9 +334,62 @@ export class GoogleMessagesWeb extends EventEmitter {
   }
   async readQr() {
     try {
-      const el = this.page.locator(this.sel.qr).first();
-      if (await el.count()) { const png = await el.screenshot({ type: 'png', timeout: 5000 }); this.qrData = 'data:image/png;base64,' + png.toString('base64'); }
+      // the most specific match that has a size (the picture itself before its wrapper; a custom element can be 0×0)
+      let el = null;
+      for (const part of this.sel.qr.split(',').map(x => x.trim()).filter(Boolean)) {
+        const c = this.page.locator(part).first();
+        if (await c.count()) { const bb = await c.boundingBox().catch(() => null); if (bb && bb.width >= 20 && bb.height >= 20) { el = c; break; } }
+      }
+      if (!el) { const c = this.page.locator(this.sel.qr).first(); if (await c.count()) el = c; }
+      if (el) {
+        const png = await el.screenshot({ type: 'png', timeout: 5000 });
+        const data = 'data:image/png;base64,' + png.toString('base64');
+        if (data !== this.qrData) { this.qrData = data; this.qrAt = Date.now(); }
+      } else { this.qrData = null; this.qrAt = 0; }
     } catch { /* the live screen still shows it */ }
+  }
+  /** 1.0.4: on the pairing page, get the QR code up without anyone tapping: pick "QR code" when Google offers it next
+   *  to pairing with the Google account, press refresh when a code ran out, and keep "Remember this computer" on. */
+  async straightToQr(s) {
+    const p = this.page; const click = async (selector) => { const el = p.locator(selector).first(); if (await el.count() && await el.isVisible().catch(() => false)) { await el.click({ timeout: 4000 }); return true; } return false; };
+    try {
+      if (!s.hasQr) {
+        if (await this.clickQrChoice()) { log('gm', 'picked "QR code"'); await sleep(this.opts.qrSettleMs ?? 1200); return; }
+        if (Date.now() - (this.lastQrRefresh || 0) > 20000 && await click(this.sel.qrRefresh)) { this.lastQrRefresh = Date.now(); log('gm', 'refreshed the QR code'); await sleep(this.opts.qrSettleMs ?? 1200); return; }
+      }
+      if (!this.rememberDone) {
+        const t = p.locator(this.sel.rememberToggle).first();
+        if (await t.count()) {
+          const on = await t.evaluate(el => el.checked === true || el.getAttribute('aria-checked') === 'true').catch(() => true);
+          if (!on) { await t.click({ timeout: 4000, force: true }).catch(() => {}); log('gm', 'turned "Remember this computer" on'); }
+          this.rememberDone = true;
+        }
+      }
+    } catch { /* the live screen still shows the page */ }
+  }
+  async clickQrChoice() {
+    const all = this.page.locator(this.sel.qrChoice); const n = Math.min(await all.count(), 6);
+    for (let i = 0; i < n; i++) {
+      const el = all.nth(i); const t = (await el.innerText().catch(() => '')).trim();
+      if (!t || /trouble|help|learn|having|can.t|cannot|how to/i.test(t)) continue;      // "Having trouble scanning the QR code?" is not the choice
+      if (!(await el.isVisible().catch(() => false))) continue;
+      await el.click({ timeout: 4000 }); return true;
+    }
+    return false;
+  }
+  /** 1.0.4: the dashboard's "Start pairing": straight to the QR code; to Google's sign-in box only when Google asks. */
+  async startPairing() {
+    const p = this.page;
+    await p.goto(this.url + '/authentication', { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await sleep(this.opts.settleMs ?? 2500);
+    let s = await this.snap(); let c = classifyPage(s, this.sel);
+    if (c.state === 'signed_out' && !/accounts\.google\.com/.test(s.url)) {
+      const b = p.locator(this.sel.signInButton).first();
+      if (await b.count()) { await b.click({ timeout: 5000 }).catch(() => {}); await p.waitForLoadState('domcontentloaded').catch(() => {}); await sleep(1500); s = await this.snap(); c = classifyPage(s, this.sel); }
+    }
+    if (c.state === 'pairing') { await this.straightToQr(s); await this.readQr(); }
+    this.setState(c.state, c.detail);
+    return { ok: true, state: c.state, needsSignIn: c.state === 'signed_out' || c.state === 'signin_blocked' };
   }
 
   // ---------- reading ----------
@@ -438,7 +561,8 @@ export class GoogleMessagesWeb extends EventEmitter {
       } else if (b.type === 'text') await p.keyboard.type(String(b.text || '').slice(0, 500), { delay: 30 });
       else if (b.type === 'key') { const k = String(b.key || ''); if (!/^(Enter|Tab|Escape|Backspace|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|PageDown|PageUp|Space)$/.test(k)) throw new Error('key not allowed'); await p.keyboard.press(k === 'Space' ? ' ' : k); }
       else if (b.type === 'scroll') await p.mouse.wheel(0, Number(b.dy) > 0 ? 500 : -500);
-      else if (b.type === 'goto') await p.goto(b.where === 'signin' ? this.url + '/welcome' : this.url + '/conversations', { waitUntil: 'domcontentloaded' });
+      else if (b.type === 'pair') return this.startPairing();
+      else if (b.type === 'goto') await p.goto(b.where === 'signin' || b.where === 'pair' ? this.url + '/authentication' : this.url + '/conversations', { waitUntil: 'domcontentloaded' });
       else if (b.type === 'reload') await p.reload({ waitUntil: 'domcontentloaded' });
       else if (b.type === 'back') await p.goBack({ waitUntil: 'domcontentloaded' }).catch(() => {});
       else throw new Error('unknown input');

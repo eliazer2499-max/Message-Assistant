@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.4 — 2026-11-08
+- **Google sign-in works from the server again.** 1.0.3 started a stripped-down headless browser, and Google refused to sign in from it ("Couldn't sign you in – This browser or app may not be secure"), whatever name it gave itself. 1.0.4 always starts the full browser the installer already puts on the server (still without a window), with a normal Chrome name and no automation marks. Checked live: Google accepts it.
+- **Pairing goes straight to the QR code.** Connect → **Start pairing**. The QR code shows big in the dashboard. On the phone: Google Messages → profile picture → Device pairing → QR code scanner. If Google offers pairing with the Google account or a QR code, the QR code is chosen by itself, and "Remember this computer" is turned on.
+- Google now wants the phone's Google account signed in once before it shows any QR code (every pairing page goes to sign-in first). If it asks, the dashboard says so and opens the server's browser live for that one sign-in; otherwise the live picture stays folded away.
+- The QR code refreshes by itself every few seconds while it is up (Google changes it), and the dashboard says **Paired ✓** the moment the phone has scanned it. It stays paired after restarts and updates.
+- If Google still refuses the sign-in, the dashboard says so in plain words ("Google refused the sign-in from the server's browser") instead of "Not signed in".
+
 ## 1.0.3 — 2026-11-08
 - **Updates: "Checking…" always finishes.** Settings → Updates now ends every check within about 15 seconds with one of three answers: "Up to date (1.0.3)", "1.0.x available — Update now", or "Couldn't reach the update source" with a short reason (no answer in time, no version.json there, broken version.json, address not found). Before, the line stayed on "Checking…" whenever the check or another part of the Settings page failed or was slow, and "Check again" showed no progress.
 - The check asks every source at the same time with one time limit, shares one look when two checks run together, and skips GitHub's few-minutes-old cached copy.

@@ -59,7 +59,7 @@ function go(v) {
   if (v === 'home') refreshOverview(); if (v === 'people') loadPeople(); if (v === 'keys') loadKeys(); if (v === 'settings') loadSettings(); if (v === 'sites') loadSites();
   if (v === 'connect') { loadConnect(); screenTimer = setInterval(loadConnect, 1500); }
 }
-const STATE_CLASS = { connected: 'ok', phone_offline: 'warn', pairing: 'warn', signed_out: 'bad', error: 'bad', other_tab: 'warn' };
+const STATE_CLASS = { connected: 'ok', phone_offline: 'warn', pairing: 'warn', signed_out: 'warn', signin_blocked: 'bad', error: 'bad', other_tab: 'warn' };
 
 // ---------------- home ----------------
 async function refreshOverview() {
@@ -68,7 +68,7 @@ async function refreshOverview() {
   const m = o.messages, cls = STATE_CLASS[m.state] || '';
   $('#connDot').className = 'dot ' + (cls === 'ok' ? 'ok' : cls === 'bad' ? 'bad' : 'warn');
   const down = m.state !== 'connected';
-  $('#banner').classList.toggle('hidden', !down);
+  $('#banner').classList.toggle('hidden', !down || VIEW === 'connect');   // 1.0.4: Connect says it itself
   if (down) $('#banner').textContent = `Google Messages: ${m.words}. Texts wait until it is fixed (Connect tab).${m.outbox_waiting ? ' ' + m.outbox_waiting + ' waiting.' : ''}`;
   sitesBadge(o.sites ? o.sites.waiting : 0);
   if (VIEW !== 'home') { badge(o.people.pending); return; }
@@ -123,16 +123,33 @@ async function openUser(id) {
 }
 $('#sheetClose').onclick = () => $('#sheet').classList.add('hidden');
 
-// ---------------- connect (live view of the server's browser) ----------------
-let shotUrl = null, loadingShot = false;
+// ---------------- connect: pair with the phone (1.0.4: straight to the QR code) ----------------
+let shotUrl = null, loadingShot = false, liveOpenedFor = '';
 async function loadConnect() {
   if (VIEW !== 'connect' || document.hidden) return;
+  let s = null;
   try {
-    const s = await GET('/api/messages/status');
+    s = await GET('/api/messages/status');
     const cls = STATE_CLASS[s.state] || '';
-    $('#cState').className = 'state ' + cls; $('#cState').textContent = s.words + (s.detail ? ' — ' + s.detail : '');
-    $('#qrCard').classList.toggle('hidden', !s.qr); if (s.qr) $('#qrImg').src = s.qr;
+    $('#cState').className = 'state ' + cls; $('#cState').textContent = s.words + (s.detail && !['connected', 'pairing', 'signed_out', 'signin_blocked'].includes(s.state) ? ' — ' + s.detail : '');
+    $('#banner').classList.add('hidden');
+    const paired = s.state === 'connected', showQr = !!s.qr && s.state === 'pairing';
+    const needsSignIn = s.state === 'signed_out' || s.state === 'signin_blocked';
+    $('#pairedBox').classList.toggle('hidden', !paired);
+    $('#qrCard').classList.toggle('hidden', !showQr); if (showQr && $('#qrImg').getAttribute('src') !== s.qr) $('#qrImg').src = s.qr;
+    $('#pairSteps').classList.toggle('hidden', paired);
+    $('#gmPair').classList.toggle('hidden', paired);
+    $('#gmPair').textContent = showQr ? 'New QR code' : 'Start pairing';
+    $('#signinNote').classList.toggle('hidden', !needsSignIn);
+    $('#signinNote').textContent = s.state === 'signin_blocked'
+      ? "Google refused the sign-in from the server's browser. Tap Restart browser, then Start pairing, and sign in again."
+      : "Google first wants the phone's Google account signed in, one time. Do it in the picture below (tap a box, then type in the box under the picture). The QR code shows right after.";
+    // the live picture opens by itself only when Google asks for the sign-in (or the page needs a hand)
+    const wantLive = needsSignIn || s.state === 'other_tab' || s.state === 'error';
+    if (wantLive && liveOpenedFor !== s.state) { $('#liveCard').open = true; liveOpenedFor = s.state; }
+    if (!wantLive) liveOpenedFor = '';
   } catch {}
+  if (!$('#liveCard').open) return;
   if (loadingShot) return; loadingShot = true;
   try {
     const r = await fetch('/api/messages/screen', { credentials: 'same-origin' });
@@ -140,6 +157,12 @@ async function loadConnect() {
     else $('#screenNote').textContent = r.status === 204 ? 'No picture (Messages is in test mode or the browser is starting).' : 'Picture not available (' + r.status + ').';
   } catch { } finally { loadingShot = false; }
 }
+$('#liveCard').addEventListener('toggle', () => { if ($('#liveCard').open) loadConnect(); });
+$('#gmPair').onclick = async () => {
+  const b = $('#gmPair'); b.disabled = true; const was = b.textContent; b.textContent = 'Getting the QR code…';
+  try { await POST('/api/messages/input', { type: 'pair' }); } catch (er) { alert(er.message); }
+  finally { b.disabled = false; b.textContent = was; loadConnect(); }
+};
 $('#screen').onclick = async (e) => {
   const r = e.target.getBoundingClientRect();
   await POST('/api/messages/input', { type: 'click', x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height }).catch(er => alert(er.message));
@@ -149,11 +172,11 @@ $('#typeBtn').onclick = async () => { const t = $('#typeText').value; if (!t) re
 $$('[data-key]').forEach(b => b.onclick = () => POST('/api/messages/input', { type: 'key', key: b.dataset.key }).then(loadConnect).catch(er => alert(er.message)));
 $$('[data-act]').forEach(b => b.onclick = () => {
   const a = b.dataset.act;
-  const body = a === 'scrollDown' ? { type: 'scroll', dy: 1 } : a === 'scrollUp' ? { type: 'scroll', dy: -1 } : a === 'messages' ? { type: 'goto', where: 'messages' } : a === 'signin' ? { type: 'goto', where: 'signin' } : { type: a };
+  const body = a === 'scrollDown' ? { type: 'scroll', dy: 1 } : a === 'scrollUp' ? { type: 'scroll', dy: -1 } : a === 'messages' ? { type: 'goto', where: 'messages' } : { type: a };
   POST('/api/messages/input', body).then(loadConnect).catch(er => alert(er.message));
 });
 $('#gmRestart').onclick = () => POST('/api/messages/restart').then(loadConnect).catch(er => alert(er.message));
-$('#gmSignout').onclick = () => { if (confirm('Unpair and sign out of Google in the server browser? You will need to sign in and scan the QR code again.')) POST('/api/messages/signout').then(loadConnect).catch(er => alert(er.message)); };
+$('#gmSignout').onclick = () => { if (confirm('Unpair this server from the phone? To use it again you pair again with the QR code.')) POST('/api/messages/signout').then(loadConnect).catch(er => alert(er.message)); };
 document.addEventListener('visibilitychange', () => { if (!document.hidden && VIEW === 'connect') loadConnect(); });
 
 // ---------------- AI keys ----------------
