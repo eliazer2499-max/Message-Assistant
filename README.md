@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/eliazer2499-max/Message-Assistant/m
 ```
 
 - Replace `+1XXXXXXXXXX` with **your** phone (it receives the admin sign-in codes). You can set or change it later: `sudo messageassistant admin-phone +1XXXXXXXXXX`
-- It installs Node 22, Caddy (HTTPS), Chromium (~400 MB, once) and the app. About 5–10 minutes.
+- It installs Node 22, Caddy (HTTPS), Chromium (~400 MB, once), a virtual screen for it (Xvfb) and the app. About 5–10 minutes.
 - At the end it prints the **dashboard address** (`https://msg.<your-ip>.sslip.io`) and an **admin password** (shown once).
 - Your own domain instead: add `MSA_DOMAIN=msg.yourdomain.com` (point its A record at the server first).
 - Ports 80 and 443 must reach the server (same as My Assistant).
@@ -35,6 +35,8 @@ You need: the phone with RCS that will be the assistant's number, and the Google
 3. When the dashboard says **Paired ✓**, you're done.
 
 The first time, Google may want the phone's Google account signed in before it shows the QR code. If so, the dashboard says so and opens the server's browser live: tap a box in the picture, type in the box under it, press **Send keys**, then **Enter**. (What you type goes straight to the browser; it is not saved or logged.) The QR code shows right after. Since 1.0.4 the server uses the full browser, which Google accepts for this sign-in (1.0.3's lighter browser got "This browser or app may not be secure").
+
+The Connect page says which browser runs: **Browser: full (visible)** is the one Google accepts for sign-in (the full Chromium, shown on a virtual screen on the server). **Browser: basic** means the virtual screen or the full Chromium is missing; Settings → Updates → **Update now** installs them. Settings shows the same line at the bottom.
 
 It stays paired across restarts and updates. If the connection drops (phone off, signed out, opened somewhere else), the dashboard shows a red banner, texts wait in a queue (none are lost), and you get an alert (see *Alerts*). The assistant presses "Use here" by itself if Messages was opened in another browser.
 

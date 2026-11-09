@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.6 — 2026-11-09
+- **Google sign-in fix, again.** 1.0.4 hid the browser's "automated" flag with a small script, and Google spotted it: "Couldn't sign you in – This browser or app may not be secure". The script is gone; the flag is now the browser's own (and already off).
+- **The browser runs visible** on a virtual screen on the server (the full Chromium, started like a normal browser, the app connects to it). The live picture, taps and typing in the dashboard work as before.
+- **Connect shows which browser runs:** "Browser: full (visible)" or "Browser: basic". Settings shows the same at the bottom, with the version.
+- **Update now installs what it needs.** The update installs the virtual screen (Xvfb) if it is missing, and the full Chromium if only part of it is there (before, any Chromium folder counted as installed). No command line needed.
+- If the virtual screen can't start, the app still runs with the basic browser, says so, and tells you to press Update now.
+
 ## 1.0.4 — 2026-11-08
 - **Google sign-in works from the server again.** 1.0.3 started a stripped-down headless browser, and Google refused to sign in from it ("Couldn't sign you in – This browser or app may not be secure"), whatever name it gave itself. 1.0.4 always starts the full browser the installer already puts on the server (still without a window), with a normal Chrome name and no automation marks. Checked live: Google accepts it.
 - **Pairing goes straight to the QR code.** Connect → **Start pairing**. The QR code shows big in the dashboard. On the phone: Google Messages → profile picture → Device pairing → QR code scanner. If Google offers pairing with the Google account or a QR code, the QR code is chosen by itself, and "Remember this computer" is turned on.

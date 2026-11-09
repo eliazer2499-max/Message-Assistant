@@ -24,6 +24,7 @@ export const cfg = {
   // Google Messages channel: 'web' = the real Playwright driver; 'mock' = in-memory (tests); 'off'
   channel: env.MSA_CHANNEL || 'web',
   gmUrl: (env.MSA_GM_URL || 'https://messages.google.com/web').replace(/\/+$/, ''),
+  browserMode: env.MSA_BROWSER_MODE || 'auto',     // 1.0.6: auto = visible on a virtual screen when it is installed; basic = headless
   chromium: env.MSA_CHROMIUM || '',               // path to a Chromium; blank = Playwright's own (PLAYWRIGHT_BROWSERS_PATH)
   pollMs: int(env.MSA_POLL_MS, 4000),             // how often the conversation list is read (gentle)
   healthMs: int(env.MSA_HEALTH_MS, 30000),

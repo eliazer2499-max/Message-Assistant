@@ -123,6 +123,17 @@ async function openUser(id) {
 }
 $('#sheetClose').onclick = () => $('#sheet').classList.add('hidden');
 
+// 1.0.6: which browser runs, in plain words ("Browser: full (visible)" / "Browser: basic")
+function browserWords(b) { return b && b.label ? 'Browser: ' + b.label : ''; }
+function browserDiag(b) {
+  if (!b || !b.mode) return 'Browser: not started';
+  const bits = ['Browser: ' + b.label];
+  if (b.version) bits.push('Chromium ' + b.version);
+  if (b.mode === 'visible' && b.screen) bits.push('virtual screen ' + b.screen);
+  if (b.mode === 'basic' && b.why) bits.push(b.why);
+  if (b.automatedFlag) bits.push('reports itself as automated');
+  return bits.join(' · ');
+}
 // ---------------- connect: pair with the phone (1.0.4: straight to the QR code) ----------------
 let shotUrl = null, loadingShot = false, liveOpenedFor = '';
 async function loadConnect() {
@@ -141,8 +152,11 @@ async function loadConnect() {
     $('#gmPair').classList.toggle('hidden', paired);
     $('#gmPair').textContent = showQr ? 'New QR code' : 'Start pairing';
     $('#signinNote').classList.toggle('hidden', !needsSignIn);
+    $('#browserLine').textContent = browserWords(s.browserInfo);
     $('#signinNote').textContent = s.state === 'signin_blocked'
-      ? "Google refused the sign-in from the server's browser. Tap Restart browser, then Start pairing, and sign in again."
+      ? (s.browserInfo && s.browserInfo.mode === 'basic'
+        ? "Google refused the sign-in from the server's basic browser. Settings → Updates → Update now installs the full one, then Start pairing again."
+        : "Google refused the sign-in from the server's browser. Tap Restart browser, then Start pairing, and sign in again.")
       : "Google first wants the phone's Google account signed in, one time. Do it in the picture below (tap a box, then type in the box under the picture). The QR code shows right after.";
     // the live picture opens by itself only when Google asks for the sign-in (or the page needs a hand)
     const wantLive = needsSignIn || s.state === 'other_tab' || s.state === 'error';
@@ -280,6 +294,7 @@ async function loadSettings() {
     $('#activity').innerHTML = a.items.map(x => `<div><span class="muted">${when(x.ts)}</span> <b>${esc(x.action)}</b> ${esc(x.detail)}</div>`).join('');
   } catch {}
   try { const me = await GET('/api/me'); $('#ver').textContent = 'Message Assistant ' + me.version; reloadIfNewVersion(me.version); } catch {}
+  try { const m = await GET('/api/messages/status'); $('#diagBrowser').textContent = browserDiag(m.browserInfo); } catch {}
 }
 // ---------------- updates (1.0.1; 1.0.3: a check always ends, editable update source) ----------------
 const CHECK_LIMIT_MS = 15000;

@@ -138,9 +138,11 @@ fi
 say "App version: $VERSION"
 
 # ---------- Chromium (for Google Messages and the assistant's own browser) ----------
+full_chromium() { ls "$BROWSERS"/chromium-*/chrome-linux*/chrome >/dev/null 2>&1; }
 if [ "${MSA_SKIP_BROWSER:-0}" != 1 ]; then
   if [ "$DRY" = 1 ]; then echo "[dry-run] PLAYWRIGHT_BROWSERS_PATH=$BROWSERS npx playwright@$PW_VERSION install --with-deps chromium"
-  elif ls -d "$BROWSERS"/chromium-*/ >/dev/null 2>&1 && [ "$UPDATE" = 1 ] && [ -z "${MSA_BROWSER_REFRESH:-}" ]; then say "Chromium already installed"
+  # 1.0.6: "installed" means the FULL build is there (chromium-*/chrome-linux*/chrome), not just any chromium folder
+  elif full_chromium && [ "$UPDATE" = 1 ] && [ -z "${MSA_BROWSER_REFRESH:-}" ]; then say "Chromium already installed (full build)"
   else
     free_mb=$(df -BM --output=avail /opt | tail -1 | tr -dc '0-9')
     [ "${free_mb:-0}" -ge 1500 ] || die "Need about 1.5 GB free on /opt for Chromium (have ${free_mb} MB). Free some space and run again."
@@ -149,6 +151,17 @@ if [ "${MSA_SKIP_BROWSER:-0}" != 1 ]; then
     PLAYWRIGHT_BROWSERS_PATH="$BROWSERS" HOME=/root timeout -k 10 1800 npx --yes "playwright@$PW_VERSION" install --with-deps chromium || die "Chromium did not install. Run the installer again."
     rm -rf "$BROWSERS"/ffmpeg-* /root/.npm/_npx 2>/dev/null || true
     chmod -R a+rX "$BROWSERS"
+    full_chromium || warn "The full Chromium build is missing after the install; the browser will run in basic mode. Run the update again."
+  fi
+  # 1.0.6: the virtual screen the browser runs on, visible (Google refuses sign-in from more automated browsers).
+  # Installed on every install and update (also "Update now" in the dashboard) when it is missing.
+  if [ "$DRY" = 1 ]; then echo "[dry-run] apt-get install -y xvfb (if Xvfb is missing)"
+  elif command -v Xvfb >/dev/null 2>&1; then say "Virtual screen (Xvfb) already installed"
+  else
+    say "Installing the virtual screen (Xvfb)"
+    apt_xvfb() { DEBIAN_FRONTEND=noninteractive timeout -k 10 900 apt-get -o DPkg::Lock::Timeout=300 install -y -q --no-install-recommends xvfb >/dev/null 2>&1; }
+    apt_xvfb || { DEBIAN_FRONTEND=noninteractive timeout -k 10 600 apt-get -o DPkg::Lock::Timeout=300 update -q >/dev/null 2>&1; apt_xvfb; } \
+      || warn "Xvfb did not install. The browser runs in basic mode (Google may refuse the sign-in). Press Update now again later, or: sudo apt-get install xvfb"
   fi
 fi
 

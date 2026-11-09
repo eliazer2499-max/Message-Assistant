@@ -8,6 +8,10 @@
 // then pairs with the phone (QR code or a confirmation on the phone). Checked live on 2026-11-08: every pairing page
 // (/web/authentication, /web/pair, /web/conversations) sends a browser that is not signed in to /web/welcome, which
 // only offers "Sign in"; there is no QR without the account any more.
+// 1.0.6: Google refused 1.0.4's sign-in because 1.0.4 faked navigator.webdriver with a script; that script is gone.
+// The browser now runs VISIBLE on a virtual screen (Xvfb, started here) as a plain program that this driver attaches
+// to over a local debugging port, so nothing Playwright adds at launch is on it. Without Xvfb it falls back to 1.0.4's
+// headless launch ("basic"). The dashboard shows which one runs: "Browser: full (visible)" or "Browser: basic".
 // 1.0.4: Google refuses that sign-in ("This browser or app may not be secure") from Playwright's stripped-down
 // "headless shell" whatever user agent it claims, and accepts the full Chromium build running headless with a normal
 // Chrome user agent. So the driver always launches the full build (pickBrowser) and, once signed in, goes straight to
@@ -23,6 +27,8 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
+import net from 'node:net';
 import { cfg } from '../config.js';
 import { log } from '../db.js';
 
@@ -87,6 +93,42 @@ export function normalUserAgent(ua) {
 }
 const VIEW = { width: 1100, height: 800 };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+/** 1.0.6: the virtual screen. MSA_XVFB names it; else the usual places (the installer puts it in /usr/bin). */
+export function findXvfb(env = process.env) {
+  for (const p of [env.MSA_XVFB, '/usr/bin/Xvfb', '/usr/local/bin/Xvfb', '/bin/Xvfb']) if (p && fs.existsSync(p)) return p;
+  return null;
+}
+/** 1.0.6: "visible" = the full build on a virtual screen (what Google accepts); "basic" = headless (1.0.4's way). */
+export function chooseMode({ wanted = '', kind = 'full', xvfb = null, display = '' } = {}) {
+  wanted = String(wanted || 'auto').toLowerCase();
+  if (wanted === 'basic' || wanted === 'headless') return { mode: 'basic', why: 'MSA_BROWSER_MODE=' + wanted };
+  if (kind === 'shell') return { mode: 'basic', why: 'only the headless shell is installed (Update now installs the full one)' };
+  if (display) return { mode: 'visible', display, why: 'screen ' + display + ' (MSA_DISPLAY)' };
+  if (xvfb) return { mode: 'visible', xvfb, why: 'virtual screen' };
+  return { mode: 'basic', why: 'no virtual screen (Xvfb) on this server; Update now installs it' };
+}
+const SCREEN = { width: 1280, height: 1024 };
+/** The visible browser's command line: a normal browser with a local debugging port, nothing Playwright adds. */
+export function visibleArgs(profileDir, extra = [], port = 0) {
+  return [`--user-data-dir=${profileDir}`, `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1',
+    '--no-first-run', '--no-default-browser-check', '--no-sandbox', '--disable-dev-shm-usage',
+    `--window-size=${VIEW.width},${VIEW.height + 140}`, '--window-position=0,0', '--lang=en-US', '--mute-audio', ...extra, 'about:blank'];
+}
+/** A free local port (the browser is given a fixed one: with port 0 it reports itself as automated). */
+export function freePort() {
+  return new Promise((res, rej) => { const srv = net.createServer(); srv.unref(); srv.on('error', rej); srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => res(p)); }); });
+}
+/** The port the browser writes into <profile>/DevToolsActivePort once it is listening. */
+export async function waitDevToolsPort(profileDir, child, ms = 30000, given = 0) {
+  const f = path.join(profileDir, 'DevToolsActivePort'); const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (child && child.exitCode !== null) return null;
+    if (given) { try { const r = await fetch(`http://127.0.0.1:${given}/json/version`, { signal: AbortSignal.timeout(1000) }); if (r.ok) return given; } catch {} }
+    else try { const port = Number(fs.readFileSync(f, 'utf8').split('\n')[0]); if (port > 0) return port; } catch {}
+    await sleep(150);
+  }
+  return null;
+}
 const PRIO = { send: 0, input: 1, screen: 2, health: 3, poll: 4 };
 
 export function loadSelectors(dataDir = cfg.dataDir) {
@@ -193,7 +235,7 @@ export class GoogleMessagesWeb extends EventEmitter {
     this.stopped = true;
     for (const t of this.timers) clearInterval(t); this.timers = [];
     for (const j of this.queue.splice(0)) j.reject(new Error('stopped'));
-    await this.closeBrowser();
+    await this.closeBrowser(); this.stopXvfb();
     this.setState('stopped');
   }
   async playwright() {
@@ -202,14 +244,75 @@ export class GoogleMessagesWeb extends EventEmitter {
     return mod.chromium ? mod : mod.default;
   }
   async ensureBrowser() {
-    if (this.ctx && this.page && !this.page.isClosed()) return;
+    if (this.ctx && this.page && !this.page.isClosed() && (!this.proc || this.proc.exitCode === null)) return;
     await this.closeBrowser();
     const pw = await this.playwright();
     fs.mkdirSync(this.profileDir, { recursive: true, mode: 0o700 });
-    for (const f of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) { try { fs.rmSync(path.join(this.profileDir, f), { force: true }); } catch {} }
+    for (const f of ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'DevToolsActivePort']) { try { fs.rmSync(path.join(this.profileDir, f), { force: true }); } catch {} }
     // 1.0.4: the full Chromium build (pickBrowser), never the headless shell Google refuses to sign in from
     this.browser = this.opts.launch?.executablePath ? { executablePath: this.opts.launch.executablePath, kind: isHeadlessShell(this.opts.launch.executablePath) ? 'shell' : 'full', why: 'test' }
       : pickBrowser({ configured: cfg.chromium });
+    // 1.0.6: the full build, VISIBLE on a virtual screen, started as a plain program and attached to afterwards.
+    // Checked live on 2026-11-09 with made-up addresses: Google now refuses every browser Playwright starts itself
+    // (headless or visible) and a plain one started headless; it accepts the plain one started visible.
+    const mode = chooseMode({ wanted: this.opts.mode || cfg.browserMode, kind: this.browser.kind, exe: this.browser.executablePath, xvfb: findXvfb(), display: process.env.MSA_DISPLAY || '' });
+    this.browserMode = mode.mode; this.browserWhy = mode.why; this.display = null;
+    if (mode.mode === 'visible') {
+      try { await this.launchVisible(pw, mode); }
+      catch (e) {
+        log('gm', 'visible browser did not start (' + String(e.message).split('\n')[0].slice(0, 160) + '); using the basic one');
+        await this.closeBrowser(); this.browserMode = 'basic'; this.browserWhy = 'the visible browser did not start: ' + String(e.message).split('\n')[0].slice(0, 120);
+      }
+    }
+    if (this.browserMode !== 'visible') await this.launchBasic(pw);
+    const label = this.browserLabel();
+    if (this.loggedBrowser !== label) { this.loggedBrowser = label; log('gm', `browser: ${this.browserMode === 'visible' ? 'full Chromium, visible on a virtual screen' : this.browser.kind === 'full' ? 'full Chromium, headless' : 'headless shell'} (${this.browser.why}; ${this.browserWhy})`); }
+    this.page.on('crash', () => { log('gm', 'page crashed'); this.page = null; });
+    this.page.setDefaultTimeout(20000);
+    await this.page.goto(this.url + '/conversations', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(e => log('gm', 'open failed:', e.message));
+    await sleep(this.opts.settleMs ?? 2500);
+    this.launchFails = 0;
+  }
+  /** 1.0.6: Xvfb (a virtual screen) + the browser as a normal program with a local debugging port, then attach. */
+  async launchVisible(pw, mode) {
+    this.display = mode.display || await this.startXvfb(mode.xvfb);
+    const exe = this.browser.executablePath || pw.chromium.executablePath();
+    const given = await freePort();
+    const args = visibleArgs(this.profileDir, this.opts.extraArgs || [], given);
+    const env = { ...process.env, DISPLAY: this.display };
+    const child = spawn(exe, args, { stdio: ['ignore', 'ignore', 'pipe'], env });
+    this.proc = child; let errTail = '';
+    child.stderr.on('data', d => { errTail = (errTail + d).slice(-600); });
+    child.on('exit', (code, sig) => { if (this.proc === child) { this.proc = null; this.page = null; if (!this.stopped && !this.closing) log('gm', `browser closed (${sig || code})`); } });
+    const port = await waitDevToolsPort(this.profileDir, child, this.opts.launchTimeoutMs ?? 30000, given);
+    if (!port) throw new Error('the browser did not open its local port' + (errTail ? ': ' + errTail.replace(/\s+/g, ' ').slice(-160) : ''));
+    this.cdp = await pw.chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 30000 });
+    this.cdp.on('disconnected', () => { this.ctx = null; this.page = null; });
+    this.ctx = this.cdp.contexts()[0];
+    this.page = this.ctx.pages().find(p => !p.url().startsWith('devtools')) || await this.ctx.newPage();
+    // a visible browser already has the normal Chrome name and no webdriver flag; never fake it (Google sees a fake)
+    this.webdriver = await this.page.evaluate(() => navigator.webdriver).catch(() => null);
+    if (this.webdriver) log('gm', 'note: the browser reports itself as automated (navigator.webdriver); Google may refuse the sign-in');
+    this.ua = await this.page.evaluate(() => navigator.userAgent).catch(() => null);
+  }
+  async startXvfb(bin) {
+    if (this.xvfb && this.xvfb.exitCode === null && this.xvfbDisplay) return this.xvfbDisplay;
+    try { fs.mkdirSync('/tmp/.X11-unix', { recursive: true, mode: 0o1777 }); } catch {}
+    const child = spawn(bin, ['-displayfd', '3', '-screen', '0', `${SCREEN.width}x${SCREEN.height}x24`, '-nolisten', 'tcp', '-ac'], { stdio: ['ignore', 'ignore', 'pipe', 'pipe'] });
+    let err = ''; child.stderr.on('data', d => { err = (err + d).slice(-400); });
+    const n = await new Promise((res) => {
+      let buf = ''; const t = setTimeout(() => res(null), 10000);
+      child.stdio[3].on('data', d => { buf += d; const m = /(\d+)\s*\n/.exec(buf); if (m) { clearTimeout(t); res(m[1]); } });
+      child.on('exit', () => { clearTimeout(t); res(null); });
+    });
+    if (!n) { try { child.kill('SIGKILL'); } catch {} throw new Error('the virtual screen did not start' + (err ? ': ' + err.replace(/\s+/g, ' ').slice(-140) : '')); }
+    this.xvfb = child; this.xvfbDisplay = ':' + n;
+    child.on('exit', () => { if (this.xvfb === child) { this.xvfb = null; this.xvfbDisplay = null; this.page = null; } });
+    log('gm', 'virtual screen ' + this.xvfbDisplay + ' started');
+    return this.xvfbDisplay;
+  }
+  /** The 1.0.4 way: Playwright starts the browser headless (kept for servers without the virtual screen). */
+  async launchBasic(pw) {
     const launch = {
       headless: true, viewport: VIEW, locale: 'en-US',
       ignoreDefaultArgs: ['--enable-automation'],
@@ -217,7 +320,7 @@ export class GoogleMessagesWeb extends EventEmitter {
       ...(this.browser.executablePath ? { executablePath: this.browser.executablePath } : { channel: this.browser.channel }),
       ...(this.opts.launch || {}),
     };
-    if (this.ua) launch.userAgent = this.ua;
+    if (this.ua) launch.userAgent = normalUserAgent(this.ua);
     try { this.ctx = await pw.chromium.launchPersistentContext(this.profileDir, launch); }
     catch (e) {
       if (!launch.channel) throw e;
@@ -226,9 +329,8 @@ export class GoogleMessagesWeb extends EventEmitter {
       delete launch.channel; this.browser = { kind: 'shell', why: 'fallback: the full build is not installed' };
       this.ctx = await pw.chromium.launchPersistentContext(this.profileDir, launch);
     }
-    if (!this.loggedBrowser) { this.loggedBrowser = true; log('gm', `browser: ${this.browser.kind === 'full' ? 'full Chromium' : 'headless shell'} (${this.browser.why})`); }
     this.page = this.ctx.pages()[0] || await this.ctx.newPage();
-    if (!this.ua && !launch.userAgent) {
+    if (!launch.userAgent) {
       // headless Chromium calls itself "HeadlessChrome"; Google gets the normal Chrome name instead
       const ua = await this.page.evaluate(() => navigator.userAgent).catch(() => '');
       const normal = normalUserAgent(ua);
@@ -239,17 +341,35 @@ export class GoogleMessagesWeb extends EventEmitter {
         this.page = this.ctx.pages()[0] || await this.ctx.newPage();
       } else this.ua = ua || null;
     }
-    // looks like a person's browser where that is cheap: no webdriver flag
-    await this.ctx.addInitScript(() => { try { Object.defineProperty(Navigator.prototype, 'webdriver', { get: () => false, configurable: true }); } catch {} }).catch(() => {});
-    this.page.on('crash', () => { log('gm', 'page crashed'); this.page = null; });
+    // 1.0.6: NO script that rewrites navigator.webdriver. 1.0.4 added one, and Google refuses the sign-in when the flag
+    // is faked (checked live 2026-11-09: same browser, same address, refused with it and accepted without it). The flag
+    // is already false natively (--disable-blink-features=AutomationControlled).
     this.ctx.on('close', () => { this.ctx = null; this.page = null; });
-    this.page.setDefaultTimeout(20000);
-    await this.page.goto(this.url + '/conversations', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(e => log('gm', 'open failed:', e.message));
-    await sleep(this.opts.settleMs ?? 2500);
-    this.launchFails = 0;
   }
-  async closeBrowser() { const c = this.ctx; this.ctx = null; this.page = null; if (c) await c.close().catch(() => {}); }
-  async restart() { return this.enqueue('input', async () => { await this.closeBrowser(); await this.ensureBrowser(); await this.health(); return { ok: true }; }, { noEnsure: true }); }
+  /** "full (visible)" or "basic" — the words on the Connect page and in Settings. */
+  browserLabel() { return this.browserMode === 'visible' ? 'full (visible)' : this.browserMode === 'basic' ? 'basic' : null; }
+  browserInfo() {
+    if (!this.browserMode) return null;
+    const ver = /Chrome\/(\d+)/.exec(this.ua || '')?.[1];
+    return { mode: this.browserMode, label: this.browserLabel(), build: this.browser?.kind || null, version: ver || null, screen: this.browserMode === 'visible' ? (this.display || null) : null, automatedFlag: this.webdriver ?? null, why: this.browserWhy || '' };
+  }
+  async closeBrowser() {
+    const c = this.ctx, b = this.cdp, p = this.proc; this.ctx = null; this.page = null; this.cdp = null; this.proc = null;
+    this.closing = true;
+    try {
+      if (b) {
+        // the visible browser: ask it to close (it saves the profile), then make sure it is gone
+        try { const s = await b.newBrowserCDPSession(); await Promise.race([s.send('Browser.close'), sleep(3000)]); } catch {}
+        await b.close().catch(() => {});
+      } else if (c) await c.close().catch(() => {});
+      if (p && p.exitCode === null) {
+        await Promise.race([new Promise(r => p.once('exit', r)), sleep(5000)]);
+        if (p.exitCode === null && p.signalCode === null) { try { p.kill('SIGKILL'); } catch {} await Promise.race([new Promise(r => p.once('exit', r)), sleep(2000)]); }
+      }
+    } finally { this.closing = false; }
+  }
+  stopXvfb() { const x = this.xvfb; this.xvfb = null; this.xvfbDisplay = null; if (x && x.exitCode === null) { try { x.kill('SIGTERM'); } catch {} } }
+  async restart() { return this.enqueue('input', async () => { await this.closeBrowser(); this.stopXvfb(); await this.ensureBrowser(); await this.health(); return { ok: true }; }, { noEnsure: true }); }
   /** Forget the Google sign-in and pairing (a fresh profile). */
   async signOut() {
     return this.enqueue('input', async () => {
@@ -298,7 +418,7 @@ export class GoogleMessagesWeb extends EventEmitter {
   }
   status() {
     return { state: this.state, since: this.since, detail: this.detail, qr: this.qrData || null, qrAt: this.qrAt || null, pairedAt: this.pairedAt || null,
-      browser: this.browser ? this.browser.kind : null, driver: 'google-messages-web', queue: this.queue.length };
+      browser: this.browser ? this.browser.kind : null, browserInfo: this.browserInfo(), driver: 'google-messages-web', queue: this.queue.length };
   }
   async snap() { return this.page.evaluate(snapshotScript, this.sel); }
 
@@ -549,6 +669,12 @@ export class GoogleMessagesWeb extends EventEmitter {
   }
 
   // ---------- the dashboard's live view ----------
+  async viewSize() {
+    const v = this.page.viewportSize();
+    if (v) return v;
+    const r = await this.page.evaluate(() => ({ width: innerWidth, height: innerHeight })).catch(() => null);
+    return r && r.width > 0 ? r : VIEW;
+  }
   screen() {
     return this.enqueue('screen', async () => this.page.screenshot({ type: 'jpeg', quality: 60, timeout: 10000 }), { dedupe: true });
   }
@@ -556,7 +682,8 @@ export class GoogleMessagesWeb extends EventEmitter {
     return this.enqueue('input', async () => {
       const p = this.page;
       if (b.type === 'click') {
-        const x = Math.max(0, Math.min(VIEW.width, Number(b.x) * VIEW.width)), y = Math.max(0, Math.min(VIEW.height, Number(b.y) * VIEW.height));
+        const V = await this.viewSize();   // 1.0.6: the visible browser's real page size (the picture is exactly that)
+        const x = Math.max(0, Math.min(V.width, Number(b.x) * V.width)), y = Math.max(0, Math.min(V.height, Number(b.y) * V.height));
         await p.mouse.click(x, y);
       } else if (b.type === 'text') await p.keyboard.type(String(b.text || '').slice(0, 500), { delay: 30 });
       else if (b.type === 'key') { const k = String(b.key || ''); if (!/^(Enter|Tab|Escape|Backspace|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|PageDown|PageUp|Space)$/.test(k)) throw new Error('key not allowed'); await p.keyboard.press(k === 'Space' ? ' ' : k); }
