@@ -77,7 +77,7 @@ export function publicUser(u) {
   let settings = {}; try { settings = JSON.parse(u.settings || '{}'); } catch {}
   return { id: u.id, phone: u.phone.startsWith('conv:') ? '' : u.phone, label: u.name || u.phone, name: u.name || '', status: u.status,
     created: u.created, approved_at: u.approved_at, last_seen: u.last_seen, paused: !!u.paused, daily_limit: u.daily_limit, settings,
-    first_text: u.first_text || '' };
+    first_text: u.first_text || '', access_until: u.access_until || null, access_ended: accessEnded(u) };
 }
 
 export function approve(id, actor = 'admin') {
@@ -107,6 +107,26 @@ export function remove(id, actor = 'admin') {
 }
 const onRemove = [];
 export function whenRemoved(fn) { onRemove.push(fn); }     // 1.0.2: sites.js removes their files and sites
+/** 1.0.8: past the end date the admin set (none = no end). */
+export function accessEnded(u, t = now()) { return !!(u && u.access_until && t >= u.access_until); }
+/** 1.0.8: the admin sets the end of someone's access: { months: 1 } | { until: ms or 'YYYY-MM-DD' } | { until: null } (no end). */
+export function setAccessUntil(id, { months = null, days = null, until } = {}, actor = 'admin') {
+  const u = userById(id); if (!u) throw notFound();
+  let at = null;
+  if (months || days) {
+    const base = u.access_until && u.access_until > now() ? new Date(u.access_until) : new Date();      // "1 month" on an active end date extends it
+    if (months) base.setMonth(base.getMonth() + Number(months)); if (days) base.setDate(base.getDate() + Number(days));
+    at = base.getTime();
+  } else if (until !== null && until !== undefined && until !== '') {
+    if (typeof until === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(until)) {
+      const [y, mo, d] = until.split('-').map(Number); at = new Date(y, mo - 1, d, 23, 59, 59).getTime();      // the end of that day
+    } else at = Number(until);
+    if (!Number.isFinite(at) || at <= 0) throw Object.assign(new Error('Pick a date'), { status: 400 });
+  }
+  run('UPDATE users SET access_until=?, expired_notice_sent=0 WHERE id=?', at, u.id);
+  audit(actor, 'user.access_until', `${u.phone}: ${at ? new Date(at).toISOString().slice(0, 10) : 'no end'}`);
+  return userById(u.id);
+}
 export function updateUser(id, b = {}) {
   const u = userById(id); if (!u) throw notFound();
   if (b.name !== undefined) run('UPDATE users SET name=? WHERE id=?', String(b.name).slice(0, 80), u.id);

@@ -9,7 +9,8 @@
 import crypto from 'node:crypto';
 import { all, get, run, now, setting, setSetting, audit } from './db.js';
 import { token, sha256, safeEqual } from './crypto.js';
-import { normalizePhone, userByPhone, userById, whenRemoved, publicUser } from './users.js';
+import { normalizePhone, userByPhone, userById, whenRemoved, publicUser, isAdminPhone, arrive, approve, accessEnded } from './users.js';
+import * as INTEG from './integrations.js';
 import { enqueueText } from './outbox.js';
 import { AuthError } from './adminauth.js';
 
@@ -35,6 +36,8 @@ export function requestCode(rawPhone, ip) {
   const t = now();
   if (count('ucode_ip', ip, t - 3600000) >= LIMITS.perIpHour) throw new AuthError(429, 'Too many codes asked from here. Try again in an hour.');
   note('ucode_ip', ip);
+  // 1.0.8: the admin signs in here too (his own chats + Manage system), even before he ever texted the assistant
+  if (isAdminPhone(phone)) adminUser(phone);
   const u = userByPhone(phone);
   if (!u || u.status !== 'approved') { audit('anonymous', 'portal.code_unknown', `${phone.slice(0, 4)}… from ${ip}`); return { message: SAME }; }
   const last = get('SELECT created FROM user_codes WHERE user_id=? ORDER BY id DESC LIMIT 1', u.id);
@@ -48,6 +51,13 @@ export function requestCode(rawPhone, ip) {
   enqueueText({ userId: u.id, text: `Your web chat code is ${code}. It works for 10 minutes. If you did not ask for it, ignore this text.`, kind: 'code' });
   audit('system', 'portal.code_sent', `#${u.id}`);
   return { message: SAME };
+}
+/** 1.0.8: the admin's own person row (approved), made the same way as when he first texts the assistant. */
+export function adminUser(phone) {
+  let u = userByPhone(phone);
+  if (!u) { arrive({ phone, name: 'Admin', text: '' }); u = userByPhone(phone); }
+  if (u && u.status !== 'approved') u = approve(u.id, 'system');
+  return u;
 }
 export function verifyCode(rawPhone, code, ip, ua = '') {
   if (!enabled()) throw off();
@@ -68,6 +78,13 @@ export function verifyCode(rawPhone, code, ip, ua = '') {
   audit('user#' + u.id, 'portal.login', `from ${ip}`);
   return { id, csrf, user: u };
 }
+/** 1.0.8: a web-chat session for someone already proven (the admin from his dashboard). */
+export function openSession(u, ip, ua = '') {
+  const id = token(32), csrf = token(18), t = now();
+  run('INSERT INTO user_sessions(id, user_id, csrf, created, expires, ip, ua) VALUES(?,?,?,?,?,?,?)', sha256(id), u.id, csrf, t, t + SESSION_TTL, ip, String(ua).slice(0, 200));
+  audit('user#' + u.id, 'portal.login', 'from the admin dashboard');
+  return { id, csrf };
+}
 /** The signed-in person, or null (expired, blocked, removed, or the web chat turned off). */
 export function sessionFrom(id) {
   if (!id || !enabled()) return null;
@@ -86,15 +103,36 @@ export function canSend(userId) {
   note('usend', k, 1); return true;
 }
 
-/** His own chat: his texts + what the assistant texted him (sent or waiting), oldest first. after = item time. */
-export function chat(userId, after = 0, limit = 200) {
+/** His own chat: his texts + what the assistant texted him (sent or waiting), oldest first.
+ *  after = newer than this time (live updates); before = older than this time (1.0.8: "Show earlier", the whole history). */
+export function chat(userId, after = 0, limit = 200, before = 0) {
   const u = userById(userId); if (!u) return [];
-  const mine = all("SELECT id, text, ts FROM messages WHERE user_id=? AND role IN ('user','user_cmd') AND ts>? ORDER BY id DESC LIMIT ?", u.id, Number(after) || 0, limit)
+  const b = Number(before) || 9e15, a = Number(after) || 0;
+  const mine = all("SELECT id, text, ts FROM messages WHERE user_id=? AND role IN ('user','user_cmd') AND ts>? AND ts<? ORDER BY id DESC LIMIT ?", u.id, a, b, limit)
     .map(m => ({ id: 'm' + m.id, who: 'me', text: m.text, ts: m.ts }));
-  const out = all(`SELECT id, text, media_url, status, created FROM outbox WHERE (user_id=? OR (user_id IS NULL AND to_phone=?)) AND kind<>'code' AND status IN ('queued','sending','sent') AND created>? ORDER BY id DESC LIMIT ?`,
-    u.id, u.phone, Number(after) || 0, limit)
+  const out = all(`SELECT id, text, media_url, status, created FROM outbox WHERE (user_id=? OR (user_id IS NULL AND to_phone=?)) AND kind<>'code' AND status IN ('queued','sending','unconfirmed','sent') AND created>? AND created<? ORDER BY id DESC LIMIT ?`,
+    u.id, u.phone, a, b, limit)
     .map(o => { const tk = /\/m\/([A-Za-z0-9_-]{20,40})\//.exec(o.media_url || ''); return { id: 'o' + o.id, who: 'bot', text: o.text || '', img: tk ? `/m/${tk[1]}/picture` : null, ts: o.created, status: o.status === 'sent' ? 'sent' : 'sending' }; })
     .filter(o => o.text || o.img);
-  return [...mine, ...out].sort((a, b) => a.ts - b.ts || (a.who === 'me' ? -1 : 1)).slice(-limit);
+  // his texts are kept in "messages"; older answers may only be there too (the outbox keeps 30 days)
+  const outTs = new Set(out.map(o => Math.round(o.ts / 1000)));
+  const oldBot = all("SELECT id, text, ts FROM messages WHERE user_id=? AND role='assistant' AND ts>? AND ts<? ORDER BY id DESC LIMIT ?", u.id, a, b, limit)
+    .filter(m => !out.some(o => o.text === m.text && Math.abs(o.ts - m.ts) < 600000)).map(m => ({ id: 'a' + m.id, who: 'bot', text: m.text, ts: m.ts, status: 'sent' }));
+  void outTs;
+  return [...mine, ...out, ...oldBot].sort((x, y) => x.ts - y.ts || (x.who === 'me' ? -1 : 1)).slice(-limit);
 }
-export function me(s) { const p = publicUser(s.user); return { signed_in: true, csrf: s.csrf, name: (p.settings && p.settings.name) || p.name || '', phone: p.phone }; }
+/** 1.0.8: how much history there is (for "Show earlier"). */
+export function oldestTs(userId) {
+  const u = userById(userId); if (!u) return 0;
+  const a = get("SELECT MIN(ts) AS t FROM messages WHERE user_id=?", u.id)?.t || 0;
+  const b = get("SELECT MIN(created) AS t FROM outbox WHERE user_id=? AND kind<>'code'", u.id)?.t || 0;
+  return Math.min(...[a, b].filter(Boolean), 9e15) === 9e15 ? 0 : Math.min(...[a, b].filter(Boolean));
+}
+export function me(s) {
+  const p = publicUser(s.user);
+  const g = INTEG.googleSetup();
+  return { signed_in: true, csrf: s.csrf, name: (p.settings && p.settings.name) || p.name || '', phone: p.phone,
+    is_admin: isAdminPhone(s.user.phone),                                   // 1.0.8: shows "Manage system"
+    access_until: s.user.access_until || null, access_ended: accessEnded(s.user),
+    connections: INTEG.list(s.user.id), google_ready: g.ready, oldest: oldestTs(s.user.id) };
+}

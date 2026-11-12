@@ -483,7 +483,7 @@ export function learnSizeCap(id, limit) { if (limit >= 1000) setSetting('ai_key_
 export function classify({ status = 0, text = '', headers = null, provider = 'gemini', networkError = '' }) {
   const t = now();
   const who = provider === 'gemini' ? 'Google' : 'Provider';
-  if (networkError) return { kind: 'network', reason: `could not be reached (${short(networkError, 60)})`, until: t + 60000 };
+  if (networkError) return { kind: 'network', reason: `could not be reached (${short(networkError, 60)})`, until: t + 20000 };     // 1.0.8: 20 s rest (was 60)
   const msg = providerMessage(text);
   // 2.3.14: "request too large" is about THIS request's size (a small per-minute token limit, e.g. a free Groq key, or
   // the model's context), not about the key: the brain retries once on the same key with a smaller request.
@@ -496,7 +496,7 @@ export function classify({ status = 0, text = '', headers = null, provider = 'ge
       return { kind: 'quota', reason: `Google free daily limit reached (429) — resets ~${roundClock(until)}`, until, perDay: true };
     }
     const ra = parseFloat(headers?.get?.('retry-after') || '0') || 0;
-    const secs = ra || secondsFrom(text) || (perDay ? 3600 : 60);
+    const secs = ra || secondsFrom(text) || (perDay ? 3600 : 20);     // 1.0.8: the provider's own retry time; 20 s (was 60) when it gives none
     const until = t + Math.min(Math.max(secs, 1), 24 * 3600) * 1000;
     return { kind: 'quota', reason: `${provider === 'gemini' ? 'Google free limit' : 'rate limit'} reached (429)${perDay ? ' for today' : ''} — ${secs > 90 ? 'until ~' + clock(until) : 'busy for ~' + Math.ceil(secs) + ' s'}`, until, perDay };
   }
@@ -505,8 +505,8 @@ export function classify({ status = 0, text = '', headers = null, provider = 'ge
   if (status === 403) return { kind: 'bad_key', reason: `key not allowed (403)${msg ? ': ' + short(msg, 90) : ''}`, until: t + 30 * 60000, problem: 'key not allowed' };
   if (status === 404 || /model_not_found|does not exist|is not found for API version|not supported for generateContent/i.test(text))
     return { kind: 'model', reason: 'model not found — tap Test and pick one from the list', until: 0, problem: 'model not found' };
-  if (status >= 500) return { kind: 'server', reason: `${who === 'Google' ? 'Google is' : 'provider is'} having trouble (${status})`, until: t + 60000 };
-  if (status === 408) return { kind: 'server', reason: 'timed out (408)', until: t + 60000 };
+  if (status >= 500) return { kind: 'server', reason: `${who === 'Google' ? 'Google is' : 'provider is'} having trouble (${status})`, until: t + 15000 };     // 1.0.8: 15 s (was 60)
+  if (status === 408) return { kind: 'server', reason: 'timed out (408)', until: t + 15000 };
   return { kind: 'other', reason: `error ${status}${msg ? ': ' + short(msg) : ''}`, until: 0 };
 }
 

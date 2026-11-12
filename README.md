@@ -34,7 +34,7 @@ You need: the phone with RCS that will be the assistant's number, and the Google
 2. On the phone: Google Messages → profile picture → **Device pairing** → **QR code scanner**. Scan the code.
 3. When the dashboard says **Paired ✓**, you're done.
 
-The first time, Google may want the phone's Google account signed in before it shows the QR code. If so, the dashboard says so and opens the server's browser live: tap a box in the picture, type in the box under it, press **Send keys**, then **Enter**. (What you type goes straight to the browser; it is not saved or logged.) The QR code shows right after. Since 1.0.4 the server uses the full browser, which Google accepts for this sign-in (1.0.3's lighter browser got "This browser or app may not be secure").
+The first time, Google may want the phone's Google account signed in before it shows the QR code. If so, the dashboard says so and opens the server's browser live: tap a box in the picture and type: your phone's keyboard opens and the letters go straight into that box (since 1.0.7; tap, click, swipe and the mouse wheel all work in the picture). The **Send keys** box under the picture is still there as a backup. (What you type goes straight to the browser; it is not saved or logged.) The QR code shows right after. Since 1.0.4 the server uses the full browser, which Google accepts for this sign-in (1.0.3's lighter browser got "This browser or app may not be secure").
 
 The Connect page says which browser runs: **Browser: full (visible)** is the one Google accepts for sign-in (the full Chromium, shown on a virtual screen on the server). **Browser: basic** means the virtual screen or the full Chromium is missing; Settings → Updates → **Update now** installs them. Settings shows the same line at the bottom.
 
@@ -100,6 +100,12 @@ sudo messageassistant sites-access all|chosen|off  # who can build sites; sites-
 sudo messageassistant sites-limits 50 5            # MB and sites per person
 sudo messageassistant uninstall       # keeps data; add --purge to delete it
 ```
+
+## Your page: chats and connected accounts (1.0.8)
+Everyone (people and the admin) signs in at `/me` with their phone number and a 6-digit code by text. They see all their chats with the assistant (day by day, "Show earlier messages" goes back to the start) and can chat from there.
+**Connected accounts → Connect Google** lets each person connect their own Google account, read only (Gmail, Calendar, Drive file names). The admin turns it on once: Settings → Connect accounts (Google) → paste a Client ID and secret from console.cloud.google.com (free; the steps are on that card; the redirect address shown there must be added exactly). Tokens are sealed in the database like the AI keys. Disconnect removes them and tells Google.
+The admin's page has **Manage system** (opens the dashboard); the dashboard has **My chats**.
+**Access until a date:** People → Details → Access: 1 month, a date, or no end date. After it, one polite "access ended" text, then no answers.
 
 ## Web chat for each person (1.0.2)
 

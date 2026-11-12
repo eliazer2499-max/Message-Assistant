@@ -9,6 +9,9 @@ export class MockChannel extends EventEmitter {
     this.sent = [];            // { convId, phone, text, ts }
     this.convs = new Map();    // phone → convId
     this.failNext = 0;         // tests: make the next N sends fail
+    this.unconfirmNext = 0;    // tests: the next N sends leave the typing box but are not shown as sent
+    this.confirmAs = 'sent';   // tests: what a later look at the chat finds
+    this.checks = 0;
     this.n = 0;
   }
   async start() { this.setState('connected'); }
@@ -26,11 +29,18 @@ export class MockChannel extends EventEmitter {
   async send({ convId = null, phone = null, text, media = null, mediaUrl = null }) {
     if (this.state !== 'connected') { const e = new Error('Messages is not connected'); e.notConnected = true; throw e; }
     if (this.failNext > 0) { this.failNext--; throw new Error('send failed (mock)'); }
+    if (this.unconfirmNext > 0) { this.unconfirmNext--; const e = new Error('still "sending" (mock)'); e.unconfirmed = true; e.partsDone = 0; e.partText = text; e.convId = convId || (phone ? this.convFor(phone) : null); this.pendingTexts = (this.pendingTexts || []).concat(text); throw e; }
     const c = convId || (phone ? this.convFor(phone) : null);
     if (!c) throw new Error('no conversation');
     const p = phone || [...this.convs.entries()].find(([, v]) => v === c)?.[0] || '';
     this.sent.push({ convId: c, phone: p, text, ts: Date.now(), ...(media ? { media, mediaUrl } : {}) });
     return { ok: true, convId: c };
+  }
+  async confirmSent({ convId, text }) {
+    this.checks++;
+    const r = typeof this.confirmAs === 'function' ? this.confirmAs(this.checks) : this.confirmAs;
+    if (r === 'sent') { const p = [...this.convs.entries()].find(([, v]) => v === convId)?.[0] || ''; this.sent.push({ convId, phone: p, text, ts: Date.now(), late: true }); }
+    return r;
   }
   async screen() { return null; }
   async input() { return { ok: true }; }

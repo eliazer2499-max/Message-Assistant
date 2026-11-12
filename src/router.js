@@ -3,6 +3,7 @@
 // approved → commands (HELP, STOP, START, RESET, NOTES, FORGET ALL) or the agent. The admin's own phone is approved
 // automatically and can also answer an alert by text: APPROVE 12 / BLOCK 12 / PENDING.
 import { run, all, get, setting, seenOnce, audit, log, now } from './db.js';
+import { accessEnded } from './users.js';
 import { arrive, isAdminPhone, normalizePhone, userById, userByPhone, approve, block, addMessage, addUsage, usageOf, dailyLimit, clearHistory, publicUser } from './users.js';
 import { enqueueText } from './outbox.js';
 import { enqueueJob } from './agent.js';
@@ -12,6 +13,7 @@ import { handleUserText as siteDecision } from './siteflow.js';
 
 const HELP = (name) => `${name} tips:\n• Ask anything: "what time does Costco close?", "summarize this link …"\n• Tasks on the web: "check the price of … on …"\n• Reminders: "remind me at 6pm to call mom"\n• NOTES = what I remember about you\n• FORGET ALL = delete those notes\n• RESET = start a fresh conversation\n• STOP = pause me, START = turn me back on`;
 
+export function expiredText() { return String(setting('expired_text') || 'Your access to {name} has ended. Please contact the admin if you would like to keep using it. Thank you!').replace(/\{name\}/g, setting('assistant_name') || PRODUCT); }
 export function welcomeText() { return String(setting('welcome_text') || '').replace(/\{name\}/g, setting('assistant_name') || PRODUCT); }
 
 /** Admin approves in the dashboard (or by text): the person hears it right away. */
@@ -47,6 +49,15 @@ export async function handleIncoming(m) {
     return { action, user };
   }
   if (action !== 'run') return { action, user };
+  // 1.0.8: access ended (the admin's end date): one polite text, then silence until the admin extends it
+  if (accessEnded(user) && !isAdminPhone(user.phone)) {
+    if (!user.expired_notice_sent) {
+      run('UPDATE users SET expired_notice_sent=1 WHERE id=?', user.id);
+      enqueueText({ userId: user.id, text: expiredText(), kind: 'notice' });
+      audit('system', 'user.access_ended', `#${user.id}: told once`);
+    }
+    return { action: 'access_ended', user };
+  }
   const word = text.toUpperCase().replace(/[^A-Z ]/g, '').trim();
   // 1.0.2: commands are kept for the person's web chat (not shown to the AI)
   if (['STOP', 'PAUSE', 'START', 'UNPAUSE', 'HELP', 'MENU', 'RESET', 'NEW CHAT', 'NOTES', 'MEMORY', 'FORGET ALL'].includes(word) || /^forget\s+#?\d+$/i.test(text)) addMessage(user.id, 'user_cmd', text, m.extId || null);

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { all, get, run, now, setting, setSetting, db, log, audit } from './db.js';
 import { cfg } from './config.js';
-import { userById, today } from './users.js';
+import { userById, today, accessEnded } from './users.js';
 import { enqueueText } from './outbox.js';
 import { pump } from './agent.js';
 import { cleanupAttempts } from './adminauth.js';
@@ -16,7 +16,7 @@ export async function tick(t = now()) {
   for (const r of all('SELECT * FROM reminders WHERE active=1 AND due<=? ORDER BY due LIMIT 50', t)) {
     const u = userById(r.user_id);
     if (!u || u.status !== 'approved') { run('UPDATE reminders SET active=0 WHERE id=?', r.id); continue; }
-    if (!u.paused) enqueueText({ userId: u.id, text: '⏰ Reminder: ' + r.text, kind: 'reminder' });
+    if (!u.paused && !accessEnded(u)) enqueueText({ userId: u.id, text: '⏰ Reminder: ' + r.text, kind: 'reminder' });     // 1.0.8: none after the end date
     if (r.every_minutes > 0) {
       let next = r.due + r.every_minutes * 60000; while (next <= t) next += r.every_minutes * 60000;
       run('UPDATE reminders SET due=?, last_fired=? WHERE id=?', next, t, r.id);

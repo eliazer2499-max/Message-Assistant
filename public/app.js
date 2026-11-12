@@ -1,4 +1,4 @@
-// Message Assistant admin dashboard (no framework; works on a phone).
+// Message Assistant admin dashboard (no framework; works on a phone and on a desktop).
 'use strict';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -34,7 +34,13 @@ async function api(method, path, body, ms = 0) {
 const GET = (p) => api('GET', p), POST = (p, b = {}) => api('POST', p, b);
 
 // ---------------- sign-in ----------------
-function showLogin() { $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); stopTimers(); }
+function showLogin() { $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); stopTimers(); checkPortal(); }
+// 1.0.5: someone who opens the address to chat (not the admin) gets a link to their own web chat, when it is on
+let portalChecked = false;
+function checkPortal() {
+  if (portalChecked) return; portalChecked = true;
+  fetch('/api/u/me', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).then(me => { if (me && me.enabled !== false) $('#toPortal').classList.remove('hidden'); }).catch(() => {});
+}
 function showApp() { $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); go(VIEW); overviewTimer = setInterval(refreshOverview, 10000); }
 function stopTimers() { clearInterval(overviewTimer); clearInterval(screenTimer); overviewTimer = screenTimer = null; }
 $$('#loginTabs button').forEach(b => b.onclick = () => {
@@ -94,7 +100,7 @@ async function loadPeople() {
   const card = el('<div class="card"></div>');
   for (const u of users) {
     const it = el(`<div class="item"><div class="top"><span class="name">${esc(u.label)}</span><span class="chip ${u.status}">${u.status === 'pending' ? 'waiting' : u.status}${u.paused ? ' · paused' : ''}</span></div>
-      <div class="sub">${u.phone && u.phone !== u.label ? esc(u.phone) + ' · ' : ''}last text ${ago(u.last_seen)} · today ${u.today.messages} msg${u.status === 'pending' && u.first_text ? '<br>“' + esc(u.first_text) + '”' : ''}</div>
+      <div class="sub">${u.phone && u.phone !== u.label ? esc(u.phone) + ' · ' : ''}last text ${ago(u.last_seen)} · today ${u.today.messages} msg${u.access_until ? ` · <span class="chip ${u.access_ended ? 'blocked' : 'until'}">${u.access_ended ? 'ended ' : 'until '}${dateOnly(u.access_until)}</span>` : ''}${u.status === 'pending' && u.first_text ? '<br>“' + esc(u.first_text) + '”' : ''}</div>
       <div class="acts"></div></div>`);
     const acts = $('.acts', it);
     const add = (label, cls, fn) => { const b = el(`<button class="${cls}">${label}</button>`); b.onclick = fn; acts.appendChild(b); };
@@ -106,6 +112,8 @@ async function loadPeople() {
   }
   box.appendChild(card);
 }
+const dateOnly = (t) => new Date(t).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+const isoDay = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 async function openUser(id) {
   const d = await GET('/api/users/' + id);
   const u = d.user;
@@ -114,14 +122,25 @@ async function openUser(id) {
     <label>Daily limit (blank = default, 0 = none)<input id="uLimit" inputmode="numeric" value="${u.daily_limit ?? ''}"></label>
     <label class="check"><input type="checkbox" id="uPaused" ${u.paused ? 'checked' : ''}> Paused</label>
     <button id="uSave">Save</button>
+    <h2>Access</h2>
+    <p class="muted small" id="uAccess">${u.access_until ? (u.access_ended ? 'Ended on ' : 'Until ') + dateOnly(u.access_until) + (u.access_ended ? '. The assistant told them once and does not answer now.' : '. After that the assistant sends one polite “access ended” text and stops answering.') : 'No end date: they can use it until you change this.'}</p>
+    <div class="row wrap accessrow"><button id="uMonth" type="button">1 month${u.access_until && !u.access_ended ? ' more' : ''}</button><label class="inline">or until<input id="uUntil" type="date" value="${u.access_until ? isoDay(u.access_until) : ''}"></label><button id="uUntilSave" type="button">Set date</button><button id="uNoEnd" class="link" type="button">No end date</button></div>
+    <p id="uAccMsg" class="msg"></p>
     <h2>Notes (${d.notes.length})</h2>${d.notes.map(n => `<div class="item"><div class="top"><span>${esc(n.fact)}</span><button class="link small" data-note="${n.id}">Delete</button></div></div>`).join('') || '<p class="muted small">None.</p>'}
     <h2>Reminders</h2>${d.reminders.map(r => `<div class="sub">${when(r.due)} — ${esc(r.text)}${r.every_minutes ? ' (every ' + r.every_minutes + ' min)' : ''}</div>`).join('') || '<p class="muted small">None.</p>'}
     <h2>Recent messages</h2>${d.messages.map(m => `<div class="bubble ${m.role}">${esc(m.text)}</div>`).join('') || '<p class="muted small">None.</p>'}`;
   $('#sheet').classList.remove('hidden');
   $('#uSave').onclick = async () => { await POST('/api/users/' + id, { daily_limit: $('#uLimit').value, paused: $('#uPaused').checked }); $('#sheet').classList.add('hidden'); loadPeople(); };
   $$('[data-note]').forEach(b => b.onclick = async () => { await POST(`/api/users/${id}/notes/${b.dataset.note}/delete`); openUser(id); });
+  // 1.0.8: access until a date
+  const acc = async (body) => { try { await POST(`/api/users/${id}/access`, body); loadPeople(); openUser(id); } catch (er) { $('#uAccMsg').textContent = er.message; $('#uAccMsg').className = 'msg err'; } };
+  $('#uMonth').onclick = () => acc({ months: 1 });
+  $('#uUntilSave').onclick = () => $('#uUntil').value ? acc({ until: $('#uUntil').value }) : ($('#uAccMsg').textContent = 'Pick a date first.');
+  $('#uNoEnd').onclick = () => acc({ until: null });
 }
 $('#sheetClose').onclick = () => $('#sheet').classList.add('hidden');
+// 1.0.8: the admin's own chats and connected accounts (his web page)
+$('#myChats').onclick = async () => { try { const r = await POST('/api/my-chats'); location.href = r.go || '/me'; } catch (er) { alert(er.message); } };
 
 // 1.0.6: which browser runs, in plain words ("Browser: full (visible)" / "Browser: basic")
 function browserWords(b) { return b && b.label ? 'Browser: ' + b.label : ''; }
@@ -157,7 +176,7 @@ async function loadConnect() {
       ? (s.browserInfo && s.browserInfo.mode === 'basic'
         ? "Google refused the sign-in from the server's basic browser. Settings → Updates → Update now installs the full one, then Start pairing again."
         : "Google refused the sign-in from the server's browser. Tap Restart browser, then Start pairing, and sign in again.")
-      : "Google first wants the phone's Google account signed in, one time. Do it in the picture below (tap a box, then type in the box under the picture). The QR code shows right after.";
+      : "Google first wants the phone's Google account signed in, one time. Do it in the picture below: tap a box in the picture and type, the same as on any page. The QR code shows right after.";
     // the live picture opens by itself only when Google asks for the sign-in (or the page needs a hand)
     const wantLive = needsSignIn || s.state === 'other_tab' || s.state === 'error';
     if (wantLive && liveOpenedFor !== s.state) { $('#liveCard').open = true; liveOpenedFor = s.state; }
@@ -167,7 +186,7 @@ async function loadConnect() {
   if (loadingShot) return; loadingShot = true;
   try {
     const r = await fetch('/api/messages/screen', { credentials: 'same-origin' });
-    if (r.status === 200) { const b = await r.blob(); const u = URL.createObjectURL(b); $('#screen').src = u; if (shotUrl) URL.revokeObjectURL(shotUrl); shotUrl = u; $('#screenNote').textContent = 'Live (tap the picture to click there).'; }
+    if (r.status === 200) { liveHeaders(r); const b = await r.blob(); const u = URL.createObjectURL(b); $('#screen').src = u; if (shotUrl) URL.revokeObjectURL(shotUrl); shotUrl = u; if (Date.now() - (live.noteAt || 0) > 4000) $('#screenNote').textContent = 'Live. Tap or click anywhere in the picture; tap a box to type in it.'; }
     else $('#screenNote').textContent = r.status === 204 ? 'No picture (Messages is in test mode or the browser is starting).' : 'Picture not available (' + r.status + ').';
   } catch { } finally { loadingShot = false; }
 }
@@ -177,11 +196,96 @@ $('#gmPair').onclick = async () => {
   try { await POST('/api/messages/input', { type: 'pair' }); } catch (er) { alert(er.message); }
   finally { b.disabled = false; b.textContent = was; loadConnect(); }
 };
-$('#screen').onclick = async (e) => {
-  const r = e.target.getBoundingClientRect();
-  await POST('/api/messages/input', { type: 'click', x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height }).catch(er => alert(er.message));
-  loadConnect();
-};
+// 1.0.7: the live picture works like the page itself. Tap or click a spot and it is clicked there; tap a text box and
+// type with the phone's own keyboard (or the computer's); swipe or use the mouse wheel to scroll. "Send keys" stays as a backup.
+function picPoint(rect, cx, cy, bl = 0, bt = 0, w = rect.width, h = rect.height) {
+  const x = (cx - rect.left - bl) / w, y = (cy - rect.top - bt) / h;
+  if (!(w > 0 && h > 0) || x < -0.02 || y < -0.02 || x > 1.02 || y > 1.02) return null;
+  return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+}
+function fieldAt(fields, p, pad = 0.008) { return (fields || []).find(f => p.x >= f.x - pad && p.x <= f.x + f.w + pad && p.y >= f.y - pad && p.y <= f.y + f.h + pad) || null; }
+function typedEdit(was, now) { let k = 0; while (k < was.length && k < now.length && was[k] === now[k]) k++; return { back: was.length - k, text: now.slice(k) }; }
+// end of the live picture helpers
+const live = { fields: [], focus: null, down: null, touch: null, chain: Promise.resolve(), sent: '', on: false, wheel: 0, wheelAt: null, wheelT: null, typeT: null };
+function liveSend(body) { const run = live.chain.then(() => POST('/api/messages/input', body)); live.chain = run.catch(() => {}); return run; }
+function liveHeaders(r) {
+  try { const f = JSON.parse(r.headers.get('X-MSA-Fields') || '{}'); live.fields = Array.isArray(f) ? f : (f.fields || []); live.focus = f.focus || null; } catch { live.fields = []; }
+  if (live.on && live.focus && live.focus.editable) setKeysKind(live.focus.kind);
+}
+function picAt(cx, cy) { const img = $('#screen'); return picPoint(img.getBoundingClientRect(), cx, cy, img.clientLeft, img.clientTop, img.clientWidth, img.clientHeight); }
+function picScale() { const img = $('#screen'); return img.clientHeight ? (img.naturalHeight || img.clientHeight) / img.clientHeight : 1; }
+function showDot(cx, cy) { const d = $('#tapDot'), r = $('#screen').parentNode.getBoundingClientRect(); d.classList.add('hidden'); void d.offsetWidth; d.style.left = (cx - r.left) + 'px'; d.style.top = (cy - r.top) + 'px'; d.classList.remove('hidden'); }
+function setKeysKind(kind) { const k = $('#liveKeys'), t = kind === 'password' ? 'password' : 'text'; if (k.type !== t) k.type = t; k.inputMode = kind === 'email' ? 'email' : kind === 'number' ? 'numeric' : 'text'; }
+function typingOn(kind, fresh) {
+  const k = $('#liveKeys'); if (fresh || !live.on) { flushTyping(); k.value = ''; live.sent = ''; }
+  $('#liveTyping').classList.remove('hidden'); setKeysKind(kind); live.on = true;
+  if (document.activeElement !== k) k.focus({ preventScroll: true });
+}
+function typingOff() { flushTyping(); live.on = false; $('#liveKeys').value = ''; live.sent = ''; $('#liveTyping').classList.add('hidden'); $('#liveKeys').blur(); }
+function flushTyping() {
+  clearTimeout(live.typeT); live.typeT = null;
+  const now = $('#liveKeys').value; if (now === live.sent) return;
+  const e = typedEdit(live.sent, now); live.sent = now;
+  liveSend({ type: 'edit', back: e.back, text: e.text }).catch(er => alert(er.message));
+}
+function tapAt(cx, cy) {
+  const p = picAt(cx, cy); if (!p) return;
+  showDot(cx, cy);
+  // a tap on a text box opens the keyboard right away (a phone only opens it inside the tap itself)
+  const f = fieldAt(live.fields, p); if (f) typingOn(f.kind, true);
+  $('#screenNote').textContent = 'Clicking there…'; live.noteAt = Date.now();
+  const n = live.taps = (live.taps || 0) + 1;
+  liveSend({ type: 'click', x: p.x, y: p.y }).then(res => {
+    if (n !== live.taps) return;   // a newer tap is on its way; it decides
+    const fo = res && res.focus;
+    if (fo && fo.editable) { typingOn(fo.kind, !f); $('#screenNote').textContent = 'Clicked. Type now: it goes straight into the box.'; live.noteAt = Date.now(); }
+    else { if (live.on) typingOff(); $('#screenNote').textContent = 'Clicked.'; live.noteAt = Date.now(); }
+    setTimeout(loadConnect, 350);
+  }).catch(er => alert(er.message));
+}
+(() => {
+  const img = $('#screen');
+  // a mouse or pen: pointer events (the browser's own image drag and text selection are kept out of the way)
+  img.addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch' || e.button > 0) return; e.preventDefault(); live.down = { x: e.clientX, y: e.clientY, id: e.pointerId }; });
+  img.addEventListener('pointerup', (e) => {
+    const d = live.down; live.down = null; if (e.pointerType === 'touch' || !d || d.id !== e.pointerId) return;
+    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) <= 12) tapAt(e.clientX, e.clientY);
+  });
+  // a finger: touch events, so the tap itself can open the phone's keyboard (iPhones only allow it there);
+  // one finger taps or swipes, two fingers still pinch-zoom the picture
+  img.addEventListener('touchstart', (e) => { const t = e.touches[0]; live.touch = e.touches.length === 1 ? { x: t.clientX, y: t.clientY, multi: false } : { ...(live.touch || {}), multi: true }; }, { passive: true });
+  img.addEventListener('touchend', (e) => {
+    const d = live.touch; if (!d || e.touches.length) return; live.touch = null; if (d.multi) return;
+    const t = e.changedTouches[0], dx = t.clientX - d.x, dy = t.clientY - d.y;
+    e.preventDefault();   // no extra mouse click after the tap
+    if (Math.hypot(dx, dy) <= 12) return tapAt(t.clientX, t.clientY);
+    if (Math.abs(dy) > Math.abs(dx)) {   // a swipe: the page moves with the finger
+      const p = picAt(d.x, d.y) || { x: 0.5, y: 0.5 };
+      liveSend({ type: 'scroll', px: Math.round(-dy * picScale()), x: p.x, y: p.y }).then(() => setTimeout(loadConnect, 250)).catch(() => {});
+    }
+  }, { passive: false });
+  img.addEventListener('contextmenu', (e) => e.preventDefault());
+  img.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    live.wheel += e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1); live.wheelAt = picAt(e.clientX, e.clientY) || live.wheelAt;
+    if (live.wheelT) return;
+    live.wheelT = setTimeout(() => {
+      const px = Math.round(live.wheel * picScale()), p = live.wheelAt || { x: 0.5, y: 0.5 }; live.wheel = 0; live.wheelT = null;
+      if (px) liveSend({ type: 'scroll', px, x: p.x, y: p.y }).then(() => setTimeout(loadConnect, 200)).catch(() => {});
+    }, 120);
+  }, { passive: false });
+  const k = $('#liveKeys');
+  k.addEventListener('input', () => { clearTimeout(live.typeT); live.typeT = setTimeout(flushTyping, 150); });
+  k.addEventListener('keydown', (e) => {
+    if (e.isComposing) return;
+    const special = ['Enter', 'Tab', 'Escape'].includes(e.key) ? e.key : (e.key === 'Backspace' && !k.value ? 'Backspace' : null);
+    if (!special) return;
+    e.preventDefault(); flushTyping();
+    liveSend({ type: 'key', key: special }).then(() => setTimeout(loadConnect, 700)).catch(er => alert(er.message));
+    if (special !== 'Backspace') { k.value = ''; live.sent = ''; }
+  });
+  $('#liveDone').onclick = () => typingOff();
+})();
 $('#typeBtn').onclick = async () => { const t = $('#typeText').value; if (!t) return; await POST('/api/messages/input', { type: 'text', text: t }).catch(er => alert(er.message)); $('#typeText').value = ''; loadConnect(); };
 $$('[data-key]').forEach(b => b.onclick = () => POST('/api/messages/input', { type: 'key', key: b.dataset.key }).then(loadConnect).catch(er => alert(er.message)));
 $$('[data-act]').forEach(b => b.onclick = () => {
@@ -282,7 +386,29 @@ $('#sSave').onclick = async () => {
 };
 
 // ---------------- settings ----------------
+async function loadGoogle() {
+  try {
+    const { google: g } = await GET('/api/integrations');
+    $('#gRedirect').textContent = g.redirect_uri; $('#gId').value = g.client_id || '';
+    $('#gSecret').placeholder = g.has_secret ? '(saved — paste a new one to change)' : 'paste the Client secret';
+    $('#gState').textContent = g.ready ? `On ✓ · ${g.connected} Google account${g.connected === 1 ? '' : 's'} connected` : 'Off — add a Client ID and secret';
+    $('#gState').className = 'state ' + (g.ready ? 'ok' : 'muted');
+    $('#gHttps').textContent = g.https ? '' : 'Note: Google only accepts a redirect address that starts with https:// (your dashboard address). Open the dashboard through its https address so this matches.';
+  } catch {}
+}
+$('#gSave').onclick = async () => {
+  try { await POST('/api/integrations/google', { client_id: $('#gId').value, ...( $('#gSecret').value ? { client_secret: $('#gSecret').value } : {}) }); $('#gSecret').value = ''; $('#gMsg').textContent = 'Saved.'; $('#gMsg').className = 'msg ok'; loadGoogle(); }
+  catch (er) { $('#gMsg').textContent = er.message; $('#gMsg').className = 'msg err'; }
+};
+async function loadSpeed() {
+  try {
+    const d = await GET('/api/speed');
+    const s1 = (ms) => ms == null ? '—' : (ms / 1000).toFixed(1) + ' s';
+    $('#speedBox').innerHTML = d.jobs.length ? `<span>AI calls per reply</span><b>${d.avg_ai_calls}</b><span>Thinking</span><b>${s1(d.avg_think_ms)}</b><span>Waiting in line</span><b>${s1(d.avg_queue_ms)}</b><span>Texting it (queued → sent)</span><b>${s1(d.avg_send_ms)}</b><span>Last ${d.jobs.length}</span><b class="small">${d.jobs.slice(0, 8).map(j => j.timing.ai_calls + ' call' + (j.timing.ai_calls === 1 ? '' : 's') + ' ' + s1(j.timing.total_ms)).join(' · ')}</b>` : '<span>No replies measured yet</span><b>—</b>';
+  } catch {}
+}
 async function loadSettings() {
+  loadGoogle(); loadSpeed();
   checkUpdates(false);   // 1.0.3: first and on its own (before, a slow or failed part above it left "Checking…" forever)
   try {
     const d = await GET('/api/settings');

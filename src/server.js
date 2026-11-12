@@ -21,13 +21,15 @@ import * as SITES from './sites.js';
 import { serveSite, serveTree, notFoundPage, SANDBOX } from './siteserve.js';
 import { adminDecide, adminUnpublish } from './siteflow.js';
 import * as portal from './portal.js';
+import * as INTEG from './integrations.js';
 import { handleWebText } from './router.js';
 
 let CH = null;
 const PUBLIC = path.join(APP_DIR, 'public');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 const EDITABLE = ['assistant_name', 'timezone', 'waiting_text', 'welcome_text', 'busy_text', 'daily_limit', 'max_steps', 'job_minutes', 'history_messages', 'max_parallel',
-  'browser_enabled', 'browser_job_seconds', 'browser_parallel', 'alert_webhook', 'model', 'update_notify', 'portal_enabled'];
+  'browser_enabled', 'browser_job_seconds', 'browser_parallel', 'alert_webhook', 'model', 'update_notify', 'portal_enabled',
+  'expired_text', 'tool_rounds', 'fast_chat', 'google_client_id'];     // 1.0.8
 
 function send(res, status, body, headers = {}) {
   const h = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
@@ -93,6 +95,25 @@ on('POST', /^\/api\/users\/(\d+)\/approve$/, async (req, { m }) => ({ user: user
 on('POST', /^\/api\/users\/(\d+)\/block$/, async (req, { m }) => ({ user: users.publicUser(users.block(Number(m[1]))) }));
 on('POST', /^\/api\/users\/(\d+)\/remove$/, async (req, { m }) => { B.forgetUser(Number(m[1])); return users.remove(Number(m[1])); });
 on('POST', /^\/api\/users\/(\d+)$/, async (req, { m, b }) => ({ user: users.publicUser(users.updateUser(Number(m[1]), b)) }));
+// 1.0.8: access until a date: { months: 1 } | { until: 'YYYY-MM-DD' } | { until: null } (no end)
+on('POST', /^\/api\/users\/(\d+)\/access$/, async (req, { m, b }) => ({ user: users.publicUser(users.setAccessUntil(Number(m[1]), b || {})) }));
+on('GET', /^\/api\/integrations$/, async () => ({ google: INTEG.googleSetup() }));
+on('POST', /^\/api\/integrations\/google$/, async (req, { b }) => ({ google: INTEG.setGoogleClient(b || {}) }));
+// 1.0.8: the admin's own chats and accounts (his web page), straight from the dashboard
+on('POST', /^\/api\/my-chats$/, async (req) => {
+  const ph = users.adminPhones()[0];
+  if (!ph) throw Object.assign(new Error('Add your phone number in Settings → Admin phone first.'), { status: 400 });
+  const u = portal.adminUser(ph);
+  const s = portal.openSession(u, clientIp(req), req.headers['user-agent']);
+  return { __headers: { 'Set-Cookie': `msa_uid=${s.id}; Max-Age=${Math.floor(portal.SESSION_TTL / 1000)}; ${ucookie()}` }, ok: true, go: '/me' };
+});
+// 1.0.8: speed — where the time of the last replies went
+on('GET', /^\/api\/speed$/, async () => {
+  const rows = all("SELECT id, user_id, created, updated, steps, timing FROM jobs WHERE status='done' AND timing IS NOT NULL ORDER BY id DESC LIMIT 30").map(r => ({ ...r, timing: JSON.parse(r.timing || '{}') }));
+  const sent = all("SELECT created, sent_at FROM outbox WHERE status='sent' AND kind='reply' AND sent_at IS NOT NULL ORDER BY id DESC LIMIT 30");
+  const avg = (a) => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null;
+  return { jobs: rows, avg_ai_calls: avg(rows.map(r => r.timing.ai_calls || 0)), avg_think_ms: avg(rows.map(r => r.timing.total_ms || 0)), avg_queue_ms: avg(rows.map(r => r.timing.queued_ms || 0)), avg_send_ms: avg(sent.map(r => r.sent_at - r.created)) };
+});
 on('POST', /^\/api\/users\/(\d+)\/notes\/(\d+)\/delete$/, async (req, { m }) => ({ deleted: run('DELETE FROM memory WHERE id=? AND user_id=?', Number(m[2]), Number(m[1])).changes }));
 
 // ---------- AI keys ----------
@@ -152,7 +173,22 @@ U('POST', /^\/api\/u\/login\/verify$/, async (req, { b }) => {
   return { __headers: { 'Set-Cookie': `msa_uid=${s.id}; Max-Age=${Math.floor(portal.SESSION_TTL / 1000)}; ${ucookie()}` }, ok: true, csrf: s.csrf };
 }, { open: true });
 U('POST', /^\/api\/u\/logout$/, async (req, { usid }) => { portal.endSession(usid); return { __headers: { 'Set-Cookie': `msa_uid=; Max-Age=0; ${ucookie()}` }, ok: true }; }, { open: true });
-U('GET', /^\/api\/u\/chat$/, async (req, { usession, url }) => ({ items: portal.chat(usession.user_id, Number(url.searchParams.get('after')) || 0), now: Date.now() }));
+U('GET', /^\/api\/u\/chat$/, async (req, { usession, url }) => ({ items: portal.chat(usession.user_id, Number(url.searchParams.get('after')) || 0, 200, Number(url.searchParams.get('before')) || 0), now: Date.now(), oldest: portal.oldestTs(usession.user_id) }));
+// 1.0.8: Connect accounts (his own Google…), and "Manage system" for the admin
+U('GET', /^\/api\/u\/connections$/, async (req, { usession }) => ({ connections: INTEG.list(usession.user_id), google_ready: INTEG.googleSetup().ready }));
+U('POST', /^\/api\/u\/connect\/google$/, async (req, { usession }) => INTEG.startGoogle(usession.user_id, '/me'));
+U('POST', /^\/api\/u\/connections\/(\d+)\/remove$/, async (req, { usession, m }) => INTEG.disconnect(usession.user_id, m[1]));
+U('POST', /^\/api\/u\/manage$/, async (req, { usession }) => {
+  if (!users.isAdminPhone(usession.user.phone)) throw Object.assign(new Error('Only the admin can open Manage system.'), { status: 403 });
+  const s = auth.newSession(clientIp(req), req.headers['user-agent'], 'web chat (admin phone code)');
+  audit('admin', 'login', 'from the web chat (admin phone, code by text)');
+  return { __headers: setSession(null, s), ok: true, go: '/' };
+});
+on('GET', /^\/oauth\/google\/callback$/, async (req, { url }) => {
+  const q = Object.fromEntries(url.searchParams);
+  try { const r = await INTEG.finishGoogle(q); return { __raw: Buffer.from(''), __status: 302, __headers: { Location: r.back + '?connected=google#accounts' } }; }
+  catch (e) { log('google', 'connect failed:', redact(e.message)); return { __raw: Buffer.from(''), __status: 302, __headers: { Location: (e.back || '/me') + '?connect_error=' + encodeURIComponent(redact(e.message).slice(0, 160)) + '#accounts' } }; }
+}, { open: true });
 U('POST', /^\/api\/u\/send$/, async (req, { usession, b }) => {
   const text = String(b.text || '').trim().slice(0, 4000);
   if (!text) throw Object.assign(new Error('Type a message first.'), { status: 400 });
@@ -202,7 +238,7 @@ function serveSitesPaths(req, res, url) {
 
 // ---------- Google Messages connection (live view) ----------
 on('GET', /^\/api\/messages\/status$/, async () => messagesStatus());
-on('GET', /^\/api\/messages\/screen$/, async () => { const jpg = CH ? await CH.screen() : null; if (!jpg) return { __raw: Buffer.alloc(0), __status: 204 }; return { __raw: Buffer.from(jpg), __type: 'image/jpeg' }; });
+on('GET', /^\/api\/messages\/screen$/, async () => { const jpg = CH ? await CH.screen() : null; if (!jpg) return { __raw: Buffer.alloc(0), __status: 204 }; return { __raw: Buffer.from(jpg), __type: 'image/jpeg', __headers: { 'X-MSA-Fields': JSON.stringify(CH.lastFields || {}), 'Cache-Control': 'no-store' } }; });
 on('POST', /^\/api\/messages\/input$/, async (req, { b }) => { if (b.type === 'text') audit('admin', 'messages.typed', `${String(b.text || '').length} characters into the Messages browser`); if (b.type === 'pair') audit('admin', 'messages.pair', 'started pairing (QR code)'); return CH.input(b); });
 on('POST', /^\/api\/messages\/restart$/, async () => { audit('admin', 'messages.restart', ''); return CH.restart(); });
 on('POST', /^\/api\/messages\/signout$/, async () => { audit('admin', 'messages.signout', 'Google sign-in and pairing removed'); return CH.signOut(); });
@@ -231,7 +267,7 @@ export function handler() {
         if (serveSitesPaths(req, res, url)) return;
         const nf = Buffer.from(notFoundPage(url.pathname, null)); res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': nf.length, 'Content-Security-Policy': SANDBOX }); return res.end(nf);
       }
-      if (req.method === 'GET' && !url.pathname.startsWith('/api/') && url.pathname !== '/healthz') { if (serveStatic(req, res, url.pathname)) return; return send(res, 404, 'Not found'); }
+      if (req.method === 'GET' && !url.pathname.startsWith('/api/') && url.pathname !== '/healthz' && !url.pathname.startsWith('/oauth/')) { if (serveStatic(req, res, url.pathname)) return; return send(res, 404, 'Not found'); }
       const r = routes.find(x => x.method === req.method && x.re.test(url.pathname));
       if (!r) return send(res, 404, { error: 'Not found' });
       const ck = cookies(req);
@@ -249,7 +285,7 @@ export function handler() {
       }
       const b = req.method === 'POST' ? await body(req) : {};
       const out = await r.fn(req, { m: url.pathname.match(r.re), b, url, session, sid, usession, usid });
-      if (out && out.__raw) return send(res, out.__status || 200, out.__raw, { 'Content-Type': out.__type || 'application/octet-stream' });
+      if (out && out.__raw) return send(res, out.__status || 200, out.__raw, { 'Content-Type': out.__type || 'application/octet-stream', ...(out.__headers || {}) });
       if (out && out.__status === 204) { res.writeHead(204, { 'Cache-Control': 'no-store' }); return res.end(); }
       const headers = (out && out.__headers) || {};
       if (out && out.__headers) delete out.__headers;

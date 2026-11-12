@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0b6e4f">
+<meta name="theme-color" content="#0f172a">
 <title>Message Assistant</title>
 <link rel="manifest" href="manifest.webmanifest?v=__V__">
 <link rel="icon" type="image/svg+xml" href="icon.svg?v=__V__">
@@ -12,12 +12,16 @@
 <link rel="stylesheet" href="style.css?v=__V__">
 </head>
 <body>
-<div id="login" class="screen hidden">
-  <div class="card narrow">
+<div id="login" class="screen auth hidden">
+  <div class="authside">
+    <div class="authbrand"><img src="icon.svg?v=__V__" class="logo hero" width="88" height="88" alt=""><b class="authname">Message Assistant</b><span>A helpful assistant people use by texting.</span></div>
+    <div class="authdeco" aria-hidden="true"><i class="bl"></i><i class="am"></i><i class="bl short"></i></div>
+  </div>
+  <div class="card narrow authcard">
     <img src="icon.svg?v=__V__" class="logo big" width="72" height="72" alt="">
-    <h1>Message Assistant</h1>
-    <p class="muted">Admin sign-in</p>
-    <div class="tabs" id="loginTabs"><button data-t="phone" class="on">Phone code</button><button data-t="password">Password</button></div>
+    <h1 class="sr">Message Assistant</h1>
+    <p class="authtitle">Admin sign-in</p>
+    <div class="tabs seg" id="loginTabs"><button data-t="phone" class="on">Phone code</button><button data-t="password">Password</button></div>
     <form id="fPhone">
       <label>Admin phone number<input id="lPhone" type="tel" autocomplete="tel" placeholder="+1 646 555 0100" required></label>
       <button class="primary" type="submit">Text me a code</button>
@@ -33,11 +37,12 @@
       <button class="primary" type="submit">Sign in</button>
     </form>
     <p id="loginMsg" class="msg"></p>
+    <p id="toPortal" class="authalt hidden">Using the assistant? <a href="/me">Open your chat →</a></p>
   </div>
 </div>
 
 <div id="app" class="screen hidden">
-  <header><img src="icon.svg?v=__V__" class="logo" width="28" height="28" alt=""><span id="brand">Message Assistant</span><span id="connDot" class="dot"></span><button id="logout" class="link">Sign out</button></header>
+  <header><img src="icon.svg?v=__V__" class="logo" width="32" height="32" alt=""><span id="brand">Message Assistant</span><span id="connDot" class="dot" title="Phone connection"></span><button id="myChats" class="ghost small" type="button" title="Your own chats and connected accounts">💬 My chats</button><button id="logout" class="link">Sign out</button></header>
   <div id="banner" class="banner hidden"></div>
   <main>
     <section id="v-home" class="view">
@@ -66,11 +71,12 @@
         </ol>
         <div class="row wrap"><button id="gmPair" class="primary">Start pairing</button></div>
         <p id="browserLine" class="muted small"></p>
-        <p id="signinNote" class="muted small hidden">Google first wants the phone's Google account signed in, one time. Do it in the picture below (tap a box, then type in the box under the picture). The QR code shows right after.</p>
+        <p id="signinNote" class="muted small hidden">Google first wants the phone's Google account signed in, one time. Do it in the picture below: tap a box in the picture and type, the same as on any page. The QR code shows right after.</p>
       </div>
       <details class="card" id="liveCard">
         <summary>The server's browser (live)</summary>
-        <div class="screenwrap"><img id="screen" alt="The server's browser (tap to click)"><p id="screenNote" class="muted small">Loading the picture…</p></div>
+        <div class="screenwrap"><div class="screenbox"><img id="screen" alt="The server's browser (tap to click)" draggable="false"><span id="tapDot" class="tapdot hidden"></span></div><p id="screenNote" class="muted small">Loading the picture…</p></div>
+        <div id="liveTyping" class="row hidden"><input id="liveKeys" placeholder="Typing into the box you tapped…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="go"><button id="liveDone">Done</button></div>
         <div class="row"><input id="typeText" placeholder="Type here, then Send keys" autocomplete="off"><button id="typeBtn">Send keys</button></div>
         <div class="row wrap">
           <button data-key="Enter">Enter</button><button data-key="Tab">Tab</button><button data-key="Backspace">⌫</button><button data-key="Escape">Esc</button>
@@ -130,6 +136,9 @@
         <label>Messages per person per day (0 = no limit)<input data-s="daily_limit" inputmode="numeric"></label>
         <label>Messages thinking at the same time<input data-s="max_parallel" inputmode="numeric"></label>
         <label>AI steps per message<input data-s="max_steps" inputmode="numeric"></label>
+        <label>Tool rounds per message (searches, browser…; then it answers)<input data-s="tool_rounds" inputmode="numeric"></label>
+        <label class="check"><input type="checkbox" data-s="fast_chat"> Quick answers: plain chat (“hi”, “thanks”) uses one AI call, no tools</label>
+        <label>"Access ended" text (sent once after a person’s end date; {name} = assistant name)<textarea data-s="expired_text" rows="2"></textarea></label>
         <label>Gemini model (blank = default)<input data-s="model"></label>
         <label class="check"><input type="checkbox" data-s="browser_enabled"> Web browser for the assistant</label>
         <label>Browser time per message (seconds)<input data-s="browser_job_seconds" inputmode="numeric"></label>
@@ -138,6 +147,31 @@
         <label>Alert address (optional, free: https://ntfy.sh/your-secret-topic)<input data-s="alert_webhook" placeholder="https://ntfy.sh/…"></label>
         <div class="row"><button class="primary" id="saveSettings">Save</button><button id="backupBtn">Back up now</button></div>
         <p id="setMsg" class="msg"></p>
+      </div>
+      <div class="card" id="googleCard">
+        <h2>Connect accounts (Google)</h2>
+        <p class="muted small">Lets each person connect their own Google account on their page, so the assistant can read their Gmail, Calendar and Drive for them (read only). Free: you make your own Google “OAuth client” once.</p>
+        <p id="gState" class="state"></p>
+        <details class="help"><summary>How to get the Client ID and secret (about 10 minutes)</summary>
+          <ol class="steps">
+            <li>On a computer, open <b>console.cloud.google.com</b> and sign in with your Google account. Make a new project (top left → New project → name it “Message Assistant”).</li>
+            <li>Menu → <b>APIs &amp; Services → Library</b>. Turn on (Enable): <b>Gmail API</b>, <b>Google Calendar API</b>, <b>Google Drive API</b>.</li>
+            <li>Menu → <b>APIs &amp; Services → OAuth consent screen</b> (Google Auth Platform). App name: Message Assistant. User type: <b>External</b>. Your email as support and contact email. Save.</li>
+            <li>On the consent screen, <b>Audience</b>: either add each person’s Gmail under <b>Test users</b> (up to 100; Google then asks them to connect again every 7 days), or press <b>Publish app</b> (no 7-day limit; people see a “Google hasn’t verified this app” page once and tap Advanced → Continue).</li>
+            <li><b>Credentials → Create credentials → OAuth client ID</b>. Type: <b>Web application</b>. Under <b>Authorized redirect URIs</b> add exactly: <code id="gRedirect">…</code></li>
+            <li>Press Create. Copy the <b>Client ID</b> and the <b>Client secret</b> into the boxes below and press Save.</li>
+          </ol>
+          <p class="muted small" id="gHttps"></p>
+        </details>
+        <label>Client ID<input id="gId" placeholder="1234-abc.apps.googleusercontent.com" autocomplete="off"></label>
+        <label>Client secret<input id="gSecret" type="password" placeholder="(saved — paste a new one to change)" autocomplete="off"></label>
+        <div class="row"><button class="primary" id="gSave">Save</button></div>
+        <p id="gMsg" class="msg"></p>
+      </div>
+      <div class="card" id="speedCard">
+        <h2>Speed</h2>
+        <p class="muted small">The last replies: how many AI calls each used and where the time went.</p>
+        <div id="speedBox" class="kv"></div>
       </div>
       <div class="card" id="updCard">
         <h2>Updates</h2>
@@ -174,16 +208,16 @@
     </section>
   </main>
   <nav id="nav">
-    <button data-v="home" class="on">🏠<span>Home</span></button>
-    <button data-v="people">👥<span>People</span><b id="pendBadge" class="badge hidden"></b></button>
-    <button data-v="connect">📱<span>Connect</span></button>
-    <button data-v="sites">🌐<span>Sites</span><b id="sitesBadge" class="badge hidden"></b></button>
-    <button data-v="keys">🔑<span>AI keys</span></button>
-    <button data-v="settings">⚙️<span>Settings</span></button>
+    <button data-v="home" class="on"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg><span>Home</span></button>
+    <button data-v="people"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M15.5 4.8a3.3 3.3 0 0 1 0 6.4M17.5 14.8c2 .7 3.4 2.4 4 5.2"/></svg><span>People</span><b id="pendBadge" class="badge hidden"></b></button>
+    <button data-v="connect"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg><span>Connect</span></button>
+    <button data-v="sites"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.6 3.8 5.6 3.8 9s-1.2 6.4-3.8 9c-2.6-2.6-3.8-5.6-3.8-9S9.4 5.6 12 3z"/></svg><span>Sites</span><b id="sitesBadge" class="badge hidden"></b></button>
+    <button data-v="keys"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4.5"/><path d="m11.3 11.7 8.7-8.7M16.5 6.5l2.5 2.5M14 9l2 2"/></svg><span>AI keys</span></button>
+    <button data-v="settings"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
   </nav>
 </div>
 
-<div id="sheet" class="sheet hidden"><div class="sheetbody"><button class="link close" id="sheetClose">Close ✕</button><div id="sheetContent"></div></div></div>
+<div id="sheet" class="sheet hidden"><div class="sheetbody"><button class="link close" id="sheetClose" aria-label="Close">Close ✕</button><div id="sheetContent"></div></div></div>
 <script src="app.js?v=__V__"></script>
 </body>
 </html>

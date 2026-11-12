@@ -59,6 +59,16 @@ export function openDb(file) {
   const add = (t, c, type) => { if (!cols(t).includes(c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`); };
   add('users', 'site_slug', 'TEXT'); add('users', 'sites_allowed', 'INTEGER');
   add('outbox', 'media', 'TEXT'); add('outbox', 'media_url', 'TEXT');
+  // 1.0.7: a text that left the typing box but is not shown as sent yet is checked again later (never typed twice)
+  // 1.0.8: access until a date (admin: 1 month / a date / no end); one polite "access ended" text
+  add('users', 'access_until', 'INTEGER'); add('users', 'expired_notice_sent', 'INTEGER DEFAULT 0');
+  // 1.0.8: speed — where each reply's time went
+  add('jobs', 'timing', 'TEXT');
+  // 1.0.8: connected accounts (Google…), per person; tokens are sealed in secrets (like the AI keys)
+  db.exec(`CREATE TABLE IF NOT EXISTS connections (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, provider TEXT NOT NULL, account TEXT, scopes TEXT,
+    status TEXT DEFAULT 'connected', created INTEGER, updated INTEGER, last_used INTEGER, error TEXT, UNIQUE(user_id, provider, account))`);
+  db.exec('CREATE TABLE IF NOT EXISTS oauth_states (state TEXT PRIMARY KEY, user_id INTEGER, provider TEXT, created INTEGER, back TEXT)');
+  add('outbox', 'parts_done', 'INTEGER DEFAULT 0'); add('outbox', 'check_at', 'INTEGER'); add('outbox', 'checks', 'INTEGER DEFAULT 0'); add('outbox', 'check_text', 'TEXT');
   if (get('PRAGMA user_version').user_version < 2) db.exec('PRAGMA user_version=2');
   return db;
 }
@@ -94,6 +104,10 @@ export const DEFAULTS = {
   gm_state_since: '0',
   gm_baseline_done: '0',
   busy_text: 'Busy right now, one moment. I will answer as soon as I can.',
+  expired_text: 'Your access to {name} has ended. Please contact the admin if you would like to keep using it. Thank you!',   // 1.0.8
+  tool_rounds: '3',                             // 1.0.8: at most this many rounds of tools (search, browser…) per message, then it answers
+  fast_chat: '1',                               // 1.0.8: plain chat ("hi", "thanks") is answered in ONE AI call, no tools
+  google_client_id: '',                         // 1.0.8: the admin's own Google OAuth client (Connect accounts); the secret is sealed
   sites_mode: 'all',                            // 1.0.2: who can build sites: all | chosen | off
   sites_approval: '0',                          // 1.0.2: 1 = the admin approves every publish too
   sites_quota_mb: '50',                         // per person: workspace + published sites
