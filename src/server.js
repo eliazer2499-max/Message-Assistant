@@ -202,7 +202,7 @@ function serveSitesPaths(req, res, url) {
 
 // ---------- Google Messages connection (live view) ----------
 on('GET', /^\/api\/messages\/status$/, async () => messagesStatus());
-on('GET', /^\/api\/messages\/screen$/, async () => { const jpg = CH ? await CH.screen() : null; if (!jpg) return { __raw: Buffer.alloc(0), __status: 204 }; return { __raw: Buffer.from(jpg), __type: 'image/jpeg' }; });
+on('GET', /^\/api\/messages\/screen$/, async () => { const jpg = CH ? await CH.screen() : null; if (!jpg) return { __raw: Buffer.alloc(0), __status: 204 }; return { __raw: Buffer.from(jpg), __type: 'image/jpeg', __headers: { 'X-MSA-Fields': JSON.stringify(CH.lastFields || {}), 'Cache-Control': 'no-store' } }; });
 on('POST', /^\/api\/messages\/input$/, async (req, { b }) => { if (b.type === 'text') audit('admin', 'messages.typed', `${String(b.text || '').length} characters into the Messages browser`); if (b.type === 'pair') audit('admin', 'messages.pair', 'started pairing (QR code)'); return CH.input(b); });
 on('POST', /^\/api\/messages\/restart$/, async () => { audit('admin', 'messages.restart', ''); return CH.restart(); });
 on('POST', /^\/api\/messages\/signout$/, async () => { audit('admin', 'messages.signout', 'Google sign-in and pairing removed'); return CH.signOut(); });
@@ -249,7 +249,7 @@ export function handler() {
       }
       const b = req.method === 'POST' ? await body(req) : {};
       const out = await r.fn(req, { m: url.pathname.match(r.re), b, url, session, sid, usession, usid });
-      if (out && out.__raw) return send(res, out.__status || 200, out.__raw, { 'Content-Type': out.__type || 'application/octet-stream' });
+      if (out && out.__raw) return send(res, out.__status || 200, out.__raw, { 'Content-Type': out.__type || 'application/octet-stream', ...(out.__headers || {}) });
       if (out && out.__status === 204) { res.writeHead(204, { 'Cache-Control': 'no-store' }); return res.end(); }
       const headers = (out && out.__headers) || {};
       if (out && out.__headers) delete out.__headers;

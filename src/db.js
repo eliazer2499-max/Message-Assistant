@@ -59,6 +59,8 @@ export function openDb(file) {
   const add = (t, c, type) => { if (!cols(t).includes(c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`); };
   add('users', 'site_slug', 'TEXT'); add('users', 'sites_allowed', 'INTEGER');
   add('outbox', 'media', 'TEXT'); add('outbox', 'media_url', 'TEXT');
+  // 1.0.7: a text that left the typing box but is not shown as sent yet is checked again later (never typed twice)
+  add('outbox', 'parts_done', 'INTEGER DEFAULT 0'); add('outbox', 'check_at', 'INTEGER'); add('outbox', 'checks', 'INTEGER DEFAULT 0'); add('outbox', 'check_text', 'TEXT');
   if (get('PRAGMA user_version').user_version < 2) db.exec('PRAGMA user_version=2');
   return db;
 }

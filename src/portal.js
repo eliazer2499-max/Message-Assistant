@@ -91,7 +91,7 @@ export function chat(userId, after = 0, limit = 200) {
   const u = userById(userId); if (!u) return [];
   const mine = all("SELECT id, text, ts FROM messages WHERE user_id=? AND role IN ('user','user_cmd') AND ts>? ORDER BY id DESC LIMIT ?", u.id, Number(after) || 0, limit)
     .map(m => ({ id: 'm' + m.id, who: 'me', text: m.text, ts: m.ts }));
-  const out = all(`SELECT id, text, media_url, status, created FROM outbox WHERE (user_id=? OR (user_id IS NULL AND to_phone=?)) AND kind<>'code' AND status IN ('queued','sending','sent') AND created>? ORDER BY id DESC LIMIT ?`,
+  const out = all(`SELECT id, text, media_url, status, created FROM outbox WHERE (user_id=? OR (user_id IS NULL AND to_phone=?)) AND kind<>'code' AND status IN ('queued','sending','unconfirmed','sent') AND created>? ORDER BY id DESC LIMIT ?`,
     u.id, u.phone, Number(after) || 0, limit)
     .map(o => { const tk = /\/m\/([A-Za-z0-9_-]{20,40})\//.exec(o.media_url || ''); return { id: 'o' + o.id, who: 'bot', text: o.text || '', img: tk ? `/m/${tk[1]}/picture` : null, ts: o.created, status: o.status === 'sent' ? 'sent' : 'sending' }; })
     .filter(o => o.text || o.img);

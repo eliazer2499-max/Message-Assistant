@@ -1,6 +1,6 @@
 {
   "name": "messageassistant",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "description": "Message Assistant: a multi-user AI assistant people use by texting (Google Messages / RCS). Node 22 built-ins + playwright-core (installed by install.sh).",
   "type": "module",

@@ -17,18 +17,32 @@ function listHtml() {
 // like the real web app, the open page updates itself (here: every 300 ms) — the driver never reloads to read
 const LIVE = `<script>setInterval(async()=>{const j=await (await fetch('/live?c='+encodeURIComponent(location.pathname))).json();const q=document.querySelector('mw-qr-code img');if(q&&j.qr&&q.getAttribute('src')!==j.qr)q.setAttribute('src',j.qr);if(j.autoNav&&j.mode==='connected'&&/authentication/.test(location.pathname))location.href='/web/conversations';const n=document.querySelector('nav');if(n&&n.innerHTML!==j.list)n.innerHTML=j.list;const m=document.querySelector('main');if(m&&j.msgs!==null&&m.innerHTML!==j.msgs)m.innerHTML=j.msgs;const b=document.querySelector('#banner');if(b.textContent!==j.banner)b.textContent=j.banner;},300)</script>`;
 const page = (body) => `<!doctype html><html><head><title>Messages</title></head><body><div id="banner">${st.banner}</div>${body}${LIVE}</body></html>`;
-const msgsHtml = (c) => c.msgs.map(x => `<mws-message-wrapper msg-id="${x.id}" is-outgoing="${x.out}"><div class="text-msg-content">${esc(x.text)}</div></mws-message-wrapper>`).join('');
+// 1.0.7: an outgoing bubble can show Google's clock ("Sending…") or "Not sent"
+const statusHtml = (x) => x.state === 'pending' ? '<mws-message-status data-e2e-message-status="sending"><mat-icon>schedule</mat-icon><span>Sending…</span></mws-message-status>'
+  : x.state === 'failed' ? '<mws-message-status><mat-icon>error</mat-icon><span>Not sent. Tap to retry</span></mws-message-status>' : (x.out ? '<mws-message-status><span>Sent</span></mws-message-status>' : '');
+const msgsHtml = (c) => c.msgs.map(x => `<mws-message-wrapper msg-id="${x.id}" is-outgoing="${x.out}"><div class="text-msg-content">${esc(x.text)}</div>${statusHtml(x)}</mws-message-wrapper>`).join('');
 const fake = http.createServer(async (req, res) => {
   let b = ''; for await (const c of req) b += c;
   const u = new URL(req.url, 'http://x'); const p = u.pathname;
   const html = (h) => { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(page(h)); };
-  if (req.method === 'POST' && p === '/send') { const j = JSON.parse(b); const c = st.convs.find(x => x.id === j.conv); c.msgs.push({ id: 'o' + (++st.n), out: true, text: j.text, ...(j.media ? { media: j.media } : {}) }); res.end('{}'); return; }
+  if (req.method === 'POST' && p === '/send') {
+    const j = JSON.parse(b); const c = st.convs.find(x => x.id === j.conv); st.typed = (st.typed || 0) + 1;
+    // 1.0.7 send modes: 'ok' (default), 'pending' (clock stays), 'pendingThenSent' (clock for st.pendingMs), 'swallow' (box empties, nothing shows), 'failed'
+    const mode = st.sendMode || 'ok';
+    if (mode === 'swallow') { res.end('{}'); return; }
+    const msg = { id: 'o' + (++st.n), out: true, text: j.text, ...(j.media ? { media: j.media } : {}), ...(mode === 'pending' || mode === 'pendingThenSent' ? { state: 'pending' } : mode === 'failed' ? { state: 'failed' } : {}) };
+    c.msgs.push(msg);
+    if (mode === 'pendingThenSent') setTimeout(() => { delete msg.state; }, st.pendingMs || 1500);
+    res.end('{}'); return;
+  }
   if (req.method === 'POST' && p === '/usehere') { st.mode = 'connected'; st.banner = ''; res.end('{}'); return; }
   if (req.method === 'POST' && p === '/newchat') { const j = JSON.parse(b); const d10 = (s) => String(s).replace(/\D/g, '').slice(-10); const ex = st.convs.find(c => d10(c.name) === d10(j.to)); if (ex) { res.end(JSON.stringify({ id: ex.id })); return; } const id = String(500 + (++st.n)); st.convs.unshift({ id, name: j.to, unread: false, msgs: [] }); res.end(JSON.stringify({ id })); return; }
   if (p === '/live') { const cm = /\/conversations\/(\w+)$/.exec(u.searchParams.get('c') || ''); const c = cm && st.convs.find(x => x.id === cm[1]); if (c) c.unread = false; res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ list: listHtml(), msgs: c ? msgsHtml(c) : null, banner: st.banner, qr: qrSvg(st.qrN), mode: st.mode, autoNav: !!st.autoNav })); }
   if (req.method === 'POST' && p === '/qrchoose') { st.qrChosen = true; res.end('{}'); return; }
   if (req.method === 'POST' && p === '/remember') { st.remember = u.searchParams.get('on') === 'true'; res.end('{}'); return; }
   if (req.method === 'POST' && p === '/signin-click') { st.signInClicks++; res.end('{}'); return; }
+  // 1.0.7: a page for the live-picture taps: a text box, a password box and a button at known spots, and room to scroll
+  if (p === '/web/tapcheck') return html('<style>body{margin:0;font:16px sans-serif}#e{position:absolute;left:300px;top:200px;width:300px;height:40px}#pw{position:absolute;left:300px;top:300px;width:300px;height:40px}#b{position:absolute;left:700px;top:500px;width:120px;height:40px}#tall{height:4000px}</style><input id="e" type="email"><input id="pw" type="password"><button id="b" onclick="window.bc=(window.bc||0)+1">Next</button><div id="tall"></div><script>window.c=[];addEventListener("mousedown",e=>c.push([e.clientX,e.clientY]),true)</script>');
   if (p === '/web/fake-signin') return html('<h1>Sign in</h1><p>with your Google Account</p><input type="email">');
   if (st.mode === 'welcome' && p !== '/web/welcome') { res.writeHead(302, { Location: '/web/welcome' }); return res.end(); }
   if (st.mode === 'auth' && p !== '/web/authentication') { res.writeHead(302, { Location: '/web/authentication' }); return res.end(); }
@@ -42,7 +56,7 @@ const fake = http.createServer(async (req, res) => {
   if (m) {
     const c = st.convs.find(x => x.id === m[1]); if (!c) { res.writeHead(404); return res.end(); }
     c.unread = false;
-    return html(`<nav>${listHtml()}</nav><main>${msgsHtml(c)}</main><textarea data-e2e-message-input-box></textarea>${st.noAttach ? '' : '<input type="file" accept="image/*,*/*" style="display:none">'}<script>const f=document.querySelector('input[type=file]');let att=null;if(f)f.addEventListener('change',()=>{att=f.files[0]&&f.files[0].name;});const t=document.querySelector('textarea');t.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();const v=t.value;t.value='';if(!v&&!att)return;const m=att;att=null;fetch('/send',{method:'POST',body:JSON.stringify({conv:'${c.id}',text:m?(v||'[file] '+m):v,media:m})})}})</script>`);
+    return html(`<nav>${listHtml()}</nav><main>${msgsHtml(c)}</main>${st.editable ? '<mws-message-compose><div contenteditable="true" data-e2e-message-input-box role="textbox"></div></mws-message-compose>' : '<textarea data-e2e-message-input-box></textarea>'}${st.noAttach ? '' : '<input type="file" accept="image/*,*/*" style="display:none">'}<script>const f=document.querySelector('input[type=file]');let att=null;if(f)f.addEventListener('change',()=>{att=f.files[0]&&f.files[0].name;});const t=document.querySelector('[data-e2e-message-input-box]');const rd=()=>'value' in t?t.value:t.innerText.trim();const clr=()=>{if('value' in t)t.value='';else t.innerHTML='';};t.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(window.ignoreEnter)return;const v=rd();clr();if(!v&&!att)return;const m=att;att=null;fetch('/send',{method:'POST',body:JSON.stringify({conv:'${c.id}',text:m?(v||'[file] '+m):v,media:m})})}})</script>`);
   }
   res.writeHead(404); res.end();
 });

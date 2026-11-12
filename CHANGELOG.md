@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.7 — 2026-11-09
+- **Tap and click right in the live picture.** On Connect, the picture of the server's browser now works like the page itself: tap (phone) or click (computer) anywhere and it is clicked at that exact spot. A blue dot shows where.
+- **Tap a box and type.** Tapping a text box in the picture (like Google's email or password box) opens your phone's keyboard at once, and what you type goes straight into that box. Enter, Tab and ⌫ work too. Password letters stay hidden. On a computer, click the box and type.
+- **Scroll in the picture.** Swipe up or down on the picture (phone) or use the mouse wheel (computer). Two fingers still zoom the picture.
+- The "Send keys" box and the buttons under the picture are still there as a backup.
+- The browser no longer brings back old tabs after a hard stop, and a window Google opens during sign-in shows in the picture.
+- **Typing box fix.** Google Messages changed its typing box (it is no longer a plain text field), so replies could not be typed. Both kinds work now.
+- **"Sent" means sent.** A reply counts as sent only when it shows in the chat without Google's clock ("Sending…"). If it left the typing box but is not shown as sent, the app looks at the chat again later (after 15 s, 30 s, 1, 2, 4, 8, 16 minutes) and never types it twice; if it is missing or "Not sent", it is sent again; still stuck after about 30 minutes, the admin gets the usual failed-text report.
+
 ## 1.0.6 — 2026-11-09
 - **Google sign-in fix, again.** 1.0.4 hid the browser's "automated" flag with a small script, and Google spotted it: "Couldn't sign you in – This browser or app may not be secure". The script is gone; the flag is now the browser's own (and already off).
 - **The browser runs visible** on a virtual screen on the server (the full Chromium, started like a normal browser, the app connects to it). The live picture, taps and typing in the dashboard work as before.

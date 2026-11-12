@@ -95,3 +95,10 @@ img.logo{flex:none;object-fit:contain}header img.logo{width:28px;height:28px;max
 .paired .muted { color:var(--muted, inherit); }
 details.card > summary { cursor:pointer; font-weight:700; padding:2px 0 8px; }
 details.card:not([open]) > summary { padding-bottom:2px; }
+
+/* 1.0.7: the live picture takes taps, clicks, swipes and the wheel */
+.screenbox { position:relative; }
+.screenwrap img#screen { touch-action:pinch-zoom; -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; -webkit-user-drag:none; -webkit-tap-highlight-color:transparent; }
+.tapdot { position:absolute; width:26px; height:26px; margin:-13px 0 0 -13px; border-radius:50%; border:3px solid #1a73e8; background:rgba(26,115,232,.25); pointer-events:none; animation:tapdot .7s ease-out forwards; }
+@keyframes tapdot { from { transform:scale(.4); opacity:1; } to { transform:scale(1.4); opacity:0; } }
+#liveTyping input { font-size:16px; }

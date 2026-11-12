@@ -66,11 +66,12 @@
         </ol>
         <div class="row wrap"><button id="gmPair" class="primary">Start pairing</button></div>
         <p id="browserLine" class="muted small"></p>
-        <p id="signinNote" class="muted small hidden">Google first wants the phone's Google account signed in, one time. Do it in the picture below (tap a box, then type in the box under the picture). The QR code shows right after.</p>
+        <p id="signinNote" class="muted small hidden">Google first wants the phone's Google account signed in, one time. Do it in the picture below: tap a box in the picture and type, the same as on any page. The QR code shows right after.</p>
       </div>
       <details class="card" id="liveCard">
         <summary>The server's browser (live)</summary>
-        <div class="screenwrap"><img id="screen" alt="The server's browser (tap to click)"><p id="screenNote" class="muted small">Loading the picture…</p></div>
+        <div class="screenwrap"><div class="screenbox"><img id="screen" alt="The server's browser (tap to click)" draggable="false"><span id="tapDot" class="tapdot hidden"></span></div><p id="screenNote" class="muted small">Loading the picture…</p></div>
+        <div id="liveTyping" class="row hidden"><input id="liveKeys" placeholder="Typing into the box you tapped…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="go"><button id="liveDone">Done</button></div>
         <div class="row"><input id="typeText" placeholder="Type here, then Send keys" autocomplete="off"><button id="typeBtn">Send keys</button></div>
         <div class="row wrap">
           <button data-key="Enter">Enter</button><button data-key="Tab">Tab</button><button data-key="Backspace">⌫</button><button data-key="Escape">Esc</button>
