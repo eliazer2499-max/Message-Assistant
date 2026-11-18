@@ -37,6 +37,7 @@ export function setGoogleClient({ client_id, client_secret }, actor = 'admin') {
   if (client_id !== undefined) {
     const v = String(client_id || '').trim();
     if (v && !/^[\w.-]+\.apps\.googleusercontent\.com$/.test(v)) throw Object.assign(new Error('The Client ID ends with .apps.googleusercontent.com — copy it from Google Cloud → Credentials.'), { status: 400 });
+    if (v === '1234-abc.apps.googleusercontent.com') throw Object.assign(new Error('That is the example text from the empty box — paste your REAL Client ID from Google Cloud → Credentials (it starts with your project number).'), { status: 400 });
     run('INSERT INTO settings(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v', 'google_client_id', v);
   }
   if (client_secret) { const v = String(client_secret).trim(); if (v.length < 10) throw Object.assign(new Error('That secret looks too short.'), { status: 400 }); setSecret(SEC_CLIENT, v); rememberSecret(v); }

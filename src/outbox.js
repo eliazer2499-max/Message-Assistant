@@ -16,7 +16,8 @@ const maxTries = (kind) => (kind === 'admin' || kind === 'code' ? 3 : 6);
 const retryWait = (tries) => (cfg.testMode ? 20 : RETRY_WAIT_MS[Math.min(tries, RETRY_WAIT_MS.length) - 1]);
 export const PRIORITY = { code: 0, admin: 1, reply: 5, busy: 4, waiting: 6, welcome: 5, reminder: 5, notice: 6 };
 export function attachChannel(ch, { onFailed } = {}) { channel = ch; onFail = onFailed || null; }
-// 1.0.2: media = a picture/file on this server to attach (mediaUrl = its private link, sent instead if attaching fails)
+// 1.0.2: media = a picture/file on this server to attach (mediaUrl = its private link; 1.1.5: kept for the
+// record only — the Messages driver NEVER texts it instead of the file any more)
 export function enqueueText({ userId = null, toPhone = null, convId = null, text, kind = 'reply', priority = null, media = null, mediaUrl = null }) {
   if ((!text || !String(text).trim()) && !media) return null;
   const u = userId ? userById(userId) : null;

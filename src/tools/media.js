@@ -157,6 +157,13 @@ async function videoInfo(target) {
 }
 export const fmtDate = (yyyymmdd) => { const m = /^(\d{4})(\d{2})(\d{2})$/.exec(String(yyyymmdd || '')); if (!m) return ''; try { return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }); } catch { return ''; } };
 export const durText = (s) => { if (!s) return ''; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`; };
+/** 1.1.5 (Abish's rule): a VIDEO request searches YouTube; a SONG request searches YouTube Music — unless
+ *  the person said otherwise (the model's source argument, or a link, wins over this default). */
+export function defaultSourceFor(query = '', url = '') {
+  if (/music\.youtube\.com/i.test(String(url || ''))) return 'music';
+  if (/\b(song|songs|music|track|album|single|niggun|nigun|melody|tune)\b/i.test(String(query || ''))) return 'music';
+  return 'youtube';
+}
 async function attachThumbnail(ctx, info) {
   if (!info.thumb) return false;
   try {
@@ -192,7 +199,8 @@ async function youtubeAudio({ query, url, format, source, confirm, pick }, ctx) 
     finally { fs.rmSync(dir, { recursive: true, force: true }); }
   }
   // ---- step 1: preview (or preview another match with pick) ----
-  const music = String(source || '').toLowerCase() === 'music' || /music\.youtube\.com/i.test(String(url || ''));
+  const want = String(source || '').toLowerCase();
+  const music = /music\.youtube\.com/i.test(String(url || '')) || (want ? want === 'music' : defaultSourceFor(query, url) === 'music');   // 1.1.5: video → YouTube, song → YouTube Music, unless told otherwise
   let matches = null, prev = getPending(ctx);
   if (pick) {
     if (!prev || !Array.isArray(prev.matches) || !prev.matches[Number(pick) - 1]) return { error: 'There is no other match number ' + pick + ' waiting. Search again with different words.' };
@@ -223,7 +231,7 @@ async function youtubeAudio({ query, url, format, source, confirm, pick }, ctx) 
 
 export const MEDIA_TOOLS = [
   { name: 'youtube_audio', description: 'Find a video on YouTube (or a song on YouTube Music) for a person with NO internet — NEVER answer with a link. It works in two steps: (1) call it with search words or a link: it shows a PREVIEW — the thumbnail picture is attached and you get the title, who made it, the release date and the length; present those and ASK if this is the one they want. (2) Only when they say yes, call it again with confirm:true — then the audio itself is downloaded and sent as voice-note file(s), in full; long ones arrive as several parts, one after another. If they say it is the wrong one, call with pick:2 (etc.) to preview another match, or search with different words.',
-    params: { query: S_('What to find, e.g. "Mordechai Shapiro Yedidim" or "shiur on emunah part 2"'), url: S_('A YouTube or YouTube Music link instead of search words (optional)'), source: S_('"music" to search YouTube Music instead of YouTube (songs) — only when they ask for YouTube Music'), format: S_('mp3 (default), m4a or ogg'), confirm: { type: 'boolean', description: 'true ONLY after the person said yes to the preview — downloads and sends the audio' }, pick: { type: 'number', description: 'Preview another match from the last search (2 = second match…)' } },
+    params: { query: S_('What to find, e.g. "Mordechai Shapiro Yedidim" or "shiur on emunah part 2"'), url: S_('A YouTube or YouTube Music link instead of search words (optional)'), source: S_('Where to search. DEFAULT: a song/music request → "music" (YouTube Music); a video request → "youtube". Set it only to follow what the person asked: "music" when they want a song, "youtube" when they want a video — and the opposite only when they say so explicitly (e.g. "that song, but from regular YouTube")'), format: S_('mp3 (default), m4a or ogg'), confirm: { type: 'boolean', description: 'true ONLY after the person said yes to the preview — downloads and sends the audio' }, pick: { type: 'number', description: 'Preview another match from the last search (2 = second match…)' } },
     run: async (a, ctx) => youtubeAudio(a, ctx) },
   { name: 'extract_audio', description: 'Extract the audio from a video (or convert an audio file) and send the person the audio FILE itself as an attachment to your answer. Give a direct link to the video/audio file (…mp4/.mov/.webm/.mp3), or a YouTube link (for YouTube search words use youtube_audio). format: mp3 (default), m4a or ogg. Use it when they ask for the audio/soundtrack of a video, or to turn a video into audio they can listen to.',
     params: { url: S_('Direct link to the video or audio file'), format: S_('mp3, m4a or ogg (default mp3)'), name: S_('File name to send (optional)') }, required: ['url'],
