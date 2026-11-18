@@ -53,7 +53,7 @@ export function hasGoogle(userId) { return !!get("SELECT 1 AS x FROM connections
 export function startGoogle(userId, back = '/me') {
   const st = googleSetup();
   if (!st.ready) throw Object.assign(new Error('Google connect is not set up yet. The admin adds a Google Client ID and secret in Settings → Connect accounts.'), { status: 409 });
-  run('DELETE FROM oauth_states WHERE created<?', now() - 15 * 60000);
+  run('DELETE FROM oauth_states WHERE created<?', now() - 60 * 60000);   // 1.1.1: a connect try lives an hour (Google's consent + "unverified app" screens can take a while; 15 min ran out and the connect "didn't work")
   const state = crypto.randomBytes(24).toString('base64url');
   run('INSERT INTO oauth_states(state, user_id, provider, created, back) VALUES(?,?,?,?,?)', state, Number(userId), 'google', now(), back === '/' ? '/' : '/me');
   const q = new URLSearchParams({ client_id: st.client_id, redirect_uri: st.redirect_uri, response_type: 'code', scope: PROVIDERS.google.scopes.join(' '),
@@ -70,11 +70,14 @@ async function postForm(url, body) {
 export async function finishGoogle({ code, state, error }) {
   const row = state ? get('SELECT * FROM oauth_states WHERE state=?', String(state)) : null;
   if (row) run('DELETE FROM oauth_states WHERE state=?', row.state);
-  if (!row || now() - row.created > 15 * 60000) throw Object.assign(new Error('This connect link is old. Go back and tap Connect Google again.'), { status: 400 });
+  if (!row || now() - row.created > 60 * 60000) throw Object.assign(new Error('This connect link is old. Go back and tap Connect Google again.'), { status: 400 });
   if (error) throw Object.assign(new Error(error === 'access_denied' ? 'You said no on the Google page, so nothing was connected.' : 'Google said: ' + String(error).slice(0, 80)), { status: 400, back: row.back });
   const tok = await postForm(G.token(), { code: String(code || ''), client_id: setting('google_client_id'), client_secret: secret(SEC_CLIENT) || '', redirect_uri: redirectUri(), grant_type: 'authorization_code' });
   let account = '';
-  try { const r = await fetch(G.userinfo(), { headers: { Authorization: 'Bearer ' + tok.access_token }, signal: AbortSignal.timeout(15000) }); const j = await r.json(); account = String(j.email || '').slice(0, 200); } catch {}
+  try { const r = await fetch(G.userinfo(), { headers: { Authorization: 'Bearer ' + tok.access_token }, signal: AbortSignal.timeout(15000) }); const j = await r.json(); if (r.ok) account = String(j.email || '').slice(0, 200) || (j.sub ? 'google:' + String(j.sub).slice(0, 24) : ''); } catch {}
+  // 1.1.1: never save a connection with an empty account: the UNIQUE(user, provider, account) row then collided on
+  // the NEXT connect and the whole connect failed with "Something went wrong". Say so plainly instead.
+  if (!account) throw Object.assign(new Error('Google did not tell us which account that was, so nothing was saved. Tap Connect Google and try again.'), { status: 502, back: row.back });
   const t = now();
   const ex = get("SELECT * FROM connections WHERE user_id=? AND provider='google' AND account=?", row.user_id, account);
   const old = ex ? JSON.parse(secret(SEC_TOK(ex.id)) || '{}') : {};

@@ -10,7 +10,7 @@ import { userById, history, addMessage, addUsage, userSettings } from './users.j
 import { enqueueText } from './outbox.js';
 import { alert } from './alerts.js';
 import { PRODUCT } from './config.js';
-import { withoutApprovalEcho, withoutPastedCode } from './tidy.js';
+import { withoutApprovalEcho, withoutPastedCode, withoutLinks, wantsLinks } from './tidy.js';
 import * as SITES from './sites.js';
 import { askUser, sendPicture, notePicSent } from './siteflow.js';
 import { accessEnded, isAdminPhone } from './users.js';
@@ -19,7 +19,7 @@ import { hasGoogle } from './integrations.js';
 // 1.0.8: plain chat ("hi", "thanks!", "good night", "ok 👍") needs no tools: ONE AI call. Anything that may need the
 // web, the browser, a reminder, a note, a site, a picture or a file goes the normal way (tools allowed).
 const ACTION_WORDS = /\b(write|make|create|shot|paste|show|edit|change|delete|remove|cancel|list|add|set|start|stop|run|test|draw|translate|fix|update|save|check|read|open|call|text|message|tell|explain|summari[sz]e|write|plan)\b|[<>{}\/@#=]/i;
-const NEEDS_TOOLS = /https?:\/\/|www\.|\.(com|org|net|io)\b|remind|reminder|alarm|note|remember|forget|search|look ?up|google|find|price|cost|weather|news|score|hours|open(ing)?|close|today|tonight|tomorrow|yesterday|now|latest|current|when|where|schedule|calendar|email|gmail|drive|site|website|page|build|publish|picture|photo|image|screenshot|file|send|book|order|buy|track|calc|\d{2,}|\?/i;
+const NEEDS_TOOLS = /https?:\/\/|www\.|\.(com|org|net|io)\b|remind|reminder|alarm|note|remember|forget|search|look ?up|google|find|price|cost|weather|news|headline|score|hours|open(ing)?|close|today|tonight|tomorrow|yesterday|now|latest|current|when|where|schedule|calendar|email|gmail|drive|site|website|page|build|publish|picture|photo|image|screenshot|file|send|book|order|buy|track|calc|video|audio|mp3|extract|convert|download|\d{2,}|\?/i;
 const SMALL_TALK = /^(hi+|hey+|hello+|yo|hiya|shalom|good (morning|afternoon|evening|night)|gm|gn|thanks?( you)?( so much)?|thx|ty|tysm|ok(ay)?|k|cool|great|nice|perfect|awesome|got it|sounds good|bye|see you|lol|haha+|yes|no|sure|amazing|wow|love it|👍|🙏|❤️|😊|😂)[\s!.,🙂😊🙏👍❤️😂]*$/iu;
 export function plainChat(text) {
   const t = String(text || '').trim();
@@ -80,7 +80,8 @@ export function systemPrompt(user) {
     s.language ? `Answer in ${s.language}.` : 'Answer in the language they write in.',
     s.style ? `How they like answers: ${s.style}.` : '',
     notes.length ? 'Notes you saved about them:\n' + notes.map(n => `- (${n.id}) ${n.fact}`).join('\n') : '',
-    `What you do: answer questions, search the web, read pages, and do tasks on websites with your own browser (open, click, type, read, screenshot). Decide yourself when to look something up: for anything current (news, prices, hours, weather, scores, schedules, facts you are not sure about) search or browse first, then answer. When the answer comes from the web, end with the source link(s) (plain URLs).`,
+    `What you do: answer questions, search the web, read pages, and do tasks on websites with your own browser (open, click, type, read, screenshot). Decide yourself when to look something up: for anything current (news, prices, hours, weather, scores, schedules, facts you are not sure about) search or browse first, then answer. For news and headlines use latest_news first. You can also work with media: extract_audio turns a video file link into an audio file and sends them the file itself, and media_info tells how long a video/audio file is.`,
+    `IMPORTANT — most people using you by text have NO internet access. A link in a text is useless to them. So: answer IN FULL in the text itself (for news: the headlines and what happened, in your own words), and do NOT include links or web addresses in your answers. Only include a link when the person asks for one (for example "send me the link" or "where can I see that?"). The one exception is a website you publish for them: its link is sent with the publish question, not in your answer.`,
     siteRules(user),
     `Be quick: answer from what you know when that is enough. When you must look something up, do at most 2 searches (ask for them together in one step) and then answer.`,
     hasGoogle(user.id) ? `Their own Google account is connected (read only): google_calendar_upcoming, gmail_recent, drive_find. Use them only for their own questions; you can read, never send, change or delete.` : `You don't have access to their Google account, email or calendar. If they ask, tell them they can connect Google on their web page (Connect accounts).`,
@@ -171,6 +172,8 @@ export async function runJob(j) {
   }
   // 1.0.2: no pasted page code (a picture instead), and no second "reply YES" next to the one publish question
   final = withoutPastedCode(final, j.text);
+  // 1.1.1: no links for people without internet, unless they asked for a link
+  if (!wantsLinks(j.text)) final = withoutLinks(final);
   if (ctx.asks.length) final = withoutApprovalEcho(final, ctx.asks.map(a => 'S' + a.id));
   const extras = ctx.pics.length || ctx.asks.length || ctx.files.length;
   final = plainText(final) || (extras ? '' : 'Done.');

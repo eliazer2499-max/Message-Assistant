@@ -42,7 +42,7 @@ function accounts(r) {
   $('#accCount').textContent = list.length ? String(list.length) : '';
   $('#gList').innerHTML = list.map(c => `<div class="accrow"><span class="dot ${c.status === 'connected' ? 'ok' : 'bad'}"></span><div class="grow"><b>${escapeText(c.account || 'Google account')}</b><div class="muted small">${c.status === 'connected' ? 'Connected' + (c.last_used ? ' · used ' + when(c.last_used) : '') : escapeText(c.error || 'Connect again')}</div></div><button class="ghost small" data-rm="${c.id}" type="button">Disconnect</button></div>`).join('');
   for (const b of document.querySelectorAll('[data-rm]')) b.onclick = async () => { if (!confirm('Disconnect this Google account?')) return; try { await api('POST', `/api/u/connections/${b.dataset.rm}/remove`); accounts(await api('GET', '/api/u/connections')); msg($('#accMsg'), 'Disconnected.', true); } catch (er) { msg($('#accMsg'), er.message); } };
-  const ready = r.google_ready !== false;
+  const ready = r.google_ready === true;   // 1.1.1: only a clear "ready" shows the button (a missing/failed answer used to show Connect, which then dead-ended)
   $('#gConnect').classList.toggle('hidden', !ready); $('#gNotReady').classList.toggle('hidden', ready);
   $('#gConnect').textContent = list.length ? 'Connect another Google account' : 'Connect Google';
 }

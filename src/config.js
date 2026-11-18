@@ -21,6 +21,7 @@ export const cfg = {
   geminiBase: env.MSA_GEMINI_BASE || '',          // test override
   cloudflareBase: env.MSA_CLOUDFLARE_BASE || '',  // test override (ends in /client/v4)
   searchBase: env.MSA_SEARCH_BASE || '',          // test override for web_search
+  newsBase: env.MSA_NEWS_BASE || '',              // test override for latest_news (Google News RSS)
   // Google Messages channel: 'web' = the real Playwright driver; 'mock' = in-memory (tests); 'off'
   channel: env.MSA_CHANNEL || 'web',
   gmUrl: (env.MSA_GM_URL || 'https://messages.google.com/web').replace(/\/+$/, ''),

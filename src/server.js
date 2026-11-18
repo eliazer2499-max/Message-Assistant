@@ -77,6 +77,7 @@ on('GET', /^\/api\/overview$/, async () => ({
   people: { pending: get("SELECT COUNT(*) AS n FROM users WHERE status='pending'").n, approved: get("SELECT COUNT(*) AS n FROM users WHERE status='approved'").n, blocked: get("SELECT COUNT(*) AS n FROM users WHERE status='blocked'").n },
   keys: aikeys.listKeys().map(k => ({ id: k.id, name: k.name, status: k.status })), queue: queueStats(), browser: B.stats(),
   sites: { waiting: SITES.waitingForAdmin().length, published: get('SELECT COUNT(*) AS n FROM sites').n }, update: upd.badge(),
+  google: (() => { const g = INTEG.googleSetup(); return { ready: g.ready, connected: g.connected }; })(),     // 1.1.1: Home warns when Connect accounts was never set up
   today: get('SELECT COALESCE(SUM(messages),0) AS messages, COALESCE(SUM(replies),0) AS replies, COALESCE(SUM(model_calls),0) AS model_calls FROM usage WHERE day=?', users.today()),
 }));
 on('POST', /^\/api\/alerts\/clear$/, async (req, { b }) => { clearAlerts(b.id || null); return { ok: true }; });

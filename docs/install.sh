@@ -57,7 +57,7 @@ export DEBIAN_FRONTEND=noninteractive
 if [ "$UPDATE" != 1 ]; then
   say "Installing system packages"
   run apt-get update -y -q
-  run apt-get install -y -q ca-certificates curl gnupg tar gzip iptables debian-keyring debian-archive-keyring apt-transport-https fonts-noto-core fonts-noto-color-emoji
+  run apt-get install -y -q ca-certificates curl gnupg tar gzip iptables debian-keyring debian-archive-keyring apt-transport-https fonts-noto-core fonts-noto-color-emoji ffmpeg
 fi
 need_node=1
 if command -v node >/dev/null 2>&1; then
@@ -152,6 +152,16 @@ if [ "${MSA_SKIP_BROWSER:-0}" != 1 ]; then
     rm -rf "$BROWSERS"/ffmpeg-* /root/.npm/_npx 2>/dev/null || true
     chmod -R a+rX "$BROWSERS"
     full_chromium || warn "The full Chromium build is missing after the install; the browser will run in basic mode. Run the update again."
+  fi
+  # 1.1.1: ffmpeg, for media work (extract the audio from a video, media info). Installed on every install and
+  # update when missing, like Xvfb below.
+  if [ "$DRY" = 1 ]; then echo "[dry-run] apt-get install -y ffmpeg (if ffmpeg is missing)"
+  elif command -v ffmpeg >/dev/null 2>&1; then say "ffmpeg already installed"
+  else
+    say "Installing ffmpeg (for audio/video work)"
+    apt_ffmpeg() { DEBIAN_FRONTEND=noninteractive timeout -k 10 900 apt-get -o DPkg::Lock::Timeout=300 install -y -q --no-install-recommends ffmpeg >/dev/null 2>&1; }
+    apt_ffmpeg || { DEBIAN_FRONTEND=noninteractive timeout -k 10 600 apt-get -o DPkg::Lock::Timeout=300 update -q >/dev/null 2>&1; apt_ffmpeg; } \
+      || warn "ffmpeg did not install. Media work (extract audio from a video) stays off until: sudo apt-get install ffmpeg"
   fi
   # 1.0.6: the virtual screen the browser runs on, visible (Google refuses sign-in from more automated browsers).
   # Installed on every install and update (also "Update now" in the dashboard) when it is missing.

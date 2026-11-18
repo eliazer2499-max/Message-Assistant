@@ -8,7 +8,7 @@ It runs on your own Ubuntu server, **beside My Assistant** (its own service, por
 - **Admin login:** your phone number → a 6-digit code is texted to you through the same Google Messages session. Backup: username + password.
 - **Per person:** each approved number has its own conversation history, notes, reminders, settings, usage and browser cookies. Nobody sees anybody else's.
 - **AI:** one agent thinks for every message, using your list of free AI keys in your order (Gemini → Groq → Cloudflare → OpenRouter → Gemini 2 → any others). A key that hits its limit rests and comes back by itself; the next key answers meanwhile. If every key is resting, the person gets one "Busy right now, one moment" text and the answer follows when a key is free.
-- **Tools:** web search, reading pages, a real browser (open, click, type, scroll, screenshot), calculator, reminders, notes. Answers from the web include the source link.
+- **Tools:** web search (DuckDuckGo → Bing fallback), latest news (Google News), reading pages, a real browser (open, click, type, scroll, screenshot), calculator, reminders, notes, and media work (extract the audio from a video file and send the audio itself; needs ffmpeg, which the installer adds). Most people texting have **no internet**, so answers are given in full in the text and links are sent only when a person asks for one.
 
 ## Install (one command)
 

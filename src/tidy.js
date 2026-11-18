@@ -23,6 +23,23 @@ export function withoutApprovalEcho(text, codes = []) {
   return /[\p{L}\p{N}]{3}/u.test(rest) ? rest : '';
 }
 
+// 1.1.1: most people using this assistant by text have NO internet access (Abish). A link in a text is useless
+// to them, so links are taken out of answers by default; they stay only when the person asks for one.
+const ASKED_LINK = /\b(?:links?|urls?|web ?address|where (?:can|do) i (?:see|watch|read|find|open)|send (?:me )?(?:the )?link|give me the (?:link|address|site))\b/i;
+export function wantsLinks(ownerText = '') { return ASKED_LINK.test(String(ownerText || '')); }
+/** Take the links out of an answer, keeping the words around them (and the link text of a Markdown link). */
+export function withoutLinks(text) {
+  const t = String(text || '');
+  if (!/https?:\/\/|www\./i.test(t)) return t;
+  let s = t.replace(/\[([^\]]+)\]\((?:https?:\/\/|www\.)[^)\s]+\)/gi, '$1');       // [words](url) → words
+  s = s.replace(/\(?\s*(?:https?:\/\/|www\.)[^\s)]+\)?/gi, (m) => /^\(.*\)$/.test(m.trim()) ? '' : ' ');   // bare urls
+  s = s.replace(/^[ \t]*(?:sources?|links?|read more|more here)\s*:\s*$/gim, '');   // a "Source:" line that held only links
+  s = s.replace(/\bread more at\b/gi, '').replace(/\s+at\s+(and\b)/gi, ' $1');      // "Read more at <link> and …" → "and …"
+  s = s.replace(/[ \t]{2,}/g, ' ').replace(/\(\s*\)/g, '').replace(/\s+([.,!?;:])/g, '$1')
+       .replace(/^[ \t]*[-•]\s*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+  return s;
+}
+
 const ASKED_CODE = /\b(?:code|source|html|css|javascript|js|script|snippet|markup|file content|show me (?:the )?(?:file|index))\b/i;
 const CODE_BLOCK = /```[\w+-]*[ \t]*\n[\s\S]*?(?:\n```|$)/g;
 const LOOKS_HTML = /<!doctype html|<html[\s>]|<head[\s>]|<body[\s>]|<style[\s>]|<script[\s>]/i;

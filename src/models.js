@@ -288,7 +288,8 @@ const TOOL_WORDS = [
   [/site|website|web ?page|publish/i, /site|publish|pages/], [/browser|log ?in|sign ?up|account|password|click/i, /^browser_|^signup_/],
   [/picture|image|photo|draw|logo/i, /^image_|^send_file$/], [/video/i, /^video_/], [/apk|android|app\b/i, /^android_/], [/server|ssh|command|terminal/i, /^ssh_|^servers_|^run_command$/],
   [/file|folder|project|code/i, /^file_|^project_|^run_command$/], [/whatsapp|sms|text (him|her|them)|message (him|her)/i, /^whatsapp_send$|^sms_send$/], [/github|repo/i, /^github_/],
-  [/update|version/i, /^check_update$/], [/remember|memory|forget/i, /^memory_/], [/search|look up|find|news|price|weather/i, /^web_/],
+  [/update|version/i, /^check_update$/], [/remember|memory|forget/i, /^memory_/], [/search|look up|find|news|price|weather/i, /^web_|^latest_news$/],
+  [/video|audio|mp3|soundtrack|extract|convert/i, /^extract_audio$|^media_info$/], [/news|headline|latest|happened today/i, /^latest_news$/],
 ];
 function shortTool(t) {
   const cut = (x, n) => { x = String(x || ''); const one = x.split(/(?<=[.!?])\s/)[0]; return (one.length <= n ? one : x.slice(0, n - 1) + '…'); };

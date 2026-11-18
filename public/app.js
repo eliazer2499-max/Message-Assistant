@@ -10,7 +10,7 @@ function reloadIfNewVersion(v) {
   try { const k = 'msa-reloaded-' + v; if (sessionStorage.getItem(k)) return false; sessionStorage.setItem(k, '1'); } catch {}
   location.reload(); return true;
 }
-let CSRF = '', VIEW = 'home', screenTimer = null, overviewTimer = null, peopleStatus = 'pending', KEYS = [], PRESETS = [], editingKey = null;
+let CSRF = '', VIEW = 'home', screenTimer = null, overviewTimer = null, peopleStatus = '', KEYS = [], PRESETS = [], editingKey = null;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ago = (t) => { if (!t) return 'never'; const s = Math.round((Date.now() - t) / 1000); if (s < 60) return 'just now'; if (s < 3600) return Math.round(s / 60) + ' min ago'; if (s < 86400) return Math.round(s / 3600) + ' h ago'; return new Date(t).toLocaleDateString(); };
 const when = (t) => t ? new Date(t).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '';
@@ -75,6 +75,9 @@ async function refreshOverview() {
   if (VIEW !== 'home') { badge(o.people.pending); return; }
   $('#homeConn').innerHTML = `<h2>Google Messages</h2><p class="state ${cls}">${esc(m.words)}</p><p class="muted small">since ${ago(m.since)}${m.detail ? ' · ' + esc(m.detail) : ''}${m.outbox_waiting ? ' · ' + m.outbox_waiting + ' text(s) waiting to go out' : ''}</p>${down ? '<button class="primary" id="toConnect">Open Connect</button>' : ''}`;
   const tc = $('#toConnect'); if (tc) tc.onclick = () => go('connect');
+  // 1.1.1: if Connect accounts (Google) was never set up, people who tap "Connect Google" on their page hit a dead
+  // end ("doesn't work"). Say so here, where the admin can fix it in Settings.
+  if (o.google && !o.google.ready) $('#homeConn').innerHTML += '<p class="muted small">Connect accounts (Google) is <b>not set up yet</b>: on their own page, people see that Google connect is off. To turn it on: Settings → Connect accounts (Google).</p>';
   $('#alerts').innerHTML = o.alerts.length ? o.alerts.map(a => `<div class="alert ${a.level}">${esc(a.text)}<div class="muted small">${when(a.ts)}</div></div>`).join('') : '<p class="muted small">No alerts.</p>';
   $('#homeCounts').innerHTML = `<div class="stat"><b>${o.people.pending}</b><span>waiting</span></div><div class="stat"><b>${o.people.approved}</b><span>approved</span></div><div class="stat"><b>${o.today.messages}</b><span>texts today</span></div>`;
   $('#homeKeys').innerHTML = o.keys.length ? o.keys.map(k => `<span class="chip ${k.status}">${esc(k.name)} · ${statusWord(k.status)}</span>`).join('') : '<p class="muted small">No AI keys yet. Add one in the AI keys tab.</p>';
