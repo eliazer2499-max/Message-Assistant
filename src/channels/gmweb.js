@@ -63,6 +63,8 @@ export const SELECTORS = {
   attachInput: 'mws-message-compose input[type="file"], input[type="file"][accept*="image" i], input[type="file"]',
   attachPreview: 'mws-message-compose img[src^="blob:"], mws-message-compose [data-e2e-attachment], [data-e2e-attachment-preview], mws-attachment-thumbnail, mws-message-compose [aria-label*="Remove" i]',
   attachButton: '[data-e2e-picker-button="ATTACHMENT"], button[aria-label*="Attach" i], button[aria-label*="Add media" i], button[aria-label*="file" i]',
+  attachMenuItem: '[data-e2e-picker-item="ATTACHMENT"], [role="menuitem"]:has-text("Attach"), button:has-text("Attach file"), [role="option"]:has-text("Attach")',
+  composeRoot: 'mws-message-compose, [data-e2e-compose-area], form',
   // 1.1.4: reactions — hovering a message shows its actions (react / reply / more); the picker that opens holds
   // the emoji buttons. Google's page can change: if these stop matching, reactions quietly stop (texts never do).
   reactButton: 'button[aria-label*="React" i], [data-e2e-reaction-button], button[aria-label*="emoji" i]',
@@ -818,26 +820,88 @@ export class GoogleMessagesWeb extends EventEmitter {
     const before = await outs();
     const lastId = before.length ? before[before.length - 1].id : '';
     let mb = 0; try { mb = fs.statSync(file).size / 1048576; } catch {}
-    // 1.1.5: hand the file over, then CHECK it is really staged (a preview chip / blob picture appears in the
-    // compose area) before pressing Send. If the hidden-input path staged nothing visible, use the attach
-    // button's file chooser. If a path handed the file over but no preview selector matches this page, still
-    // try Send — the confirm below is the final judge. (Before, Send was pressed blind: when nothing was
-    // staged the send "failed" and the caller fell back to texting the file's link.)
-    const stagedShown = async () => (await this.page.locator(this.sel.attachPreview).first().count().catch(() => 0)) > 0;
+    const name = String(file).split('/').pop();
+    const mime = ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', mp3: 'audio/mpeg', m4a: 'audio/mp4', ogg: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', mp4: 'video/mp4' })[String(name.split('.').pop() || '').toLowerCase()] || 'application/octet-stream';
+    // 1.1.6: attaching is where sends of pictures/voice notes kept dying on the real page (the file never
+    // staged, Send was pressed at an empty box, and the old code fell back to texting a link). Now EVERY way
+    // a person can attach is tried, in order, and each is VERIFIED — the file's preview must show in the
+    // compose area — before Send is pressed: (1) the attach button's file chooser (with its menu item when
+    // the button opens a menu), (2) the Ctrl+K / Ctrl+Shift+A shortcut's chooser, (3) the hidden file box,
+    // (4) pasting / dropping the file into the compose box (Messages supports both). The steps tried are
+    // named in the error when all fail, so the Activity log says exactly what the page did.
+    const notes = [];
+    const stagedShown = async () => {
+      if ((await this.page.locator(this.sel.attachPreview).first().count().catch(() => 0)) > 0) return true;
+      return this.page.evaluate((n) => {
+        const root = document.querySelector('mws-message-compose') || document.body;
+        if (root.querySelector('img[src^="blob:"], video[src^="blob:"]')) return true;
+        return [...root.querySelectorAll('*')].some(e => {
+          if (e.getAttribute && /remove|attachment/i.test(e.getAttribute('aria-label') || '')) return true;
+          const t = (e.textContent || '').trim();   // the staged chip: the file's name, alone or with a small ✕/size next to it
+          return t.includes(n) && t.length <= n.length + 40;
+        });
+      }, name).catch(() => false);
+    };
     const waitStaged = async () => { const end = Date.now() + Math.min(12000, 3000 + Math.round(mb * 400)); while (Date.now() < end) { if (await stagedShown()) return true; await sleep(300); } return stagedShown(); };
-    let handed = false, shown = false;
-    const input = this.page.locator(this.sel.attachInput).first();
-    if (await input.count()) { await input.setInputFiles(file, { timeout: 8000 }).catch(() => {}); handed = true; shown = await waitStaged(); }
-    if (!shown) {
-      const btn = this.page.locator(this.sel.attachButton).first();
-      if (await btn.count()) {
-        try { const [chooser] = await Promise.all([this.page.waitForEvent('filechooser', { timeout: 8000 }), btn.click({ timeout: 5000 })]); await chooser.setFiles(file); handed = true; shown = await waitStaged(); }
-        catch { if (!handed) throw new Error('no attach button on this page'); }
-      } else if (!handed) throw new Error('no attach button on this page');
+    const chooserMs = this.opts.chooserMs ?? 6000;
+    let staged = false;
+    // (1) the attach button → file chooser (a menu item first, when the button opens a menu)
+    const btn = this.page.locator(this.sel.attachButton).first();
+    if (await btn.count().catch(() => 0)) {
+      try {
+        const chooserP = this.page.waitForEvent('filechooser', { timeout: chooserMs });
+        await btn.click({ timeout: 5000 });
+        const item = this.page.locator(this.sel.attachMenuItem).first();
+        if (await item.count().catch(() => 0)) await item.click({ timeout: 3000 }).catch(() => {});
+        const chooser = await chooserP;
+        await chooser.setFiles(file);
+        staged = await waitStaged();
+        notes.push('attach button: ' + (staged ? 'staged' : 'chooser opened, nothing staged'));
+      } catch (e) { notes.push('attach button: ' + String(e.message || e).slice(0, 80)); }
+    } else notes.push('attach button: not on this page');
+    // (2) the keyboard shortcut's chooser (Ctrl+K, then Ctrl+Shift+A)
+    if (!staged) for (const keys of ['Control+k', 'Control+Shift+a']) {
+      try {
+        await this.page.locator(this.sel.composer).first().click({ timeout: 3000 }).catch(() => {});
+        const chooserP = this.page.waitForEvent('filechooser', { timeout: chooserMs });
+        await this.page.keyboard.press(keys);
+        const chooser = await chooserP;
+        await chooser.setFiles(file);
+        staged = await waitStaged();
+        notes.push(`shortcut ${keys}: ` + (staged ? 'staged' : 'chooser opened, nothing staged'));
+        if (staged) break;
+      } catch (e) { notes.push(`shortcut ${keys}: no chooser`); }
     }
-    // 1.1.4: bigger files (voice notes, not screenshots) need time to become a sendable preview before Send is
-    // pressed, and time to show as sent after — scale both waits with the file size (the fixed 1.5 s / 25 s
-    // were too short for audio, which is why audio "failed" and went out as a link)
+    // (3) the hidden file box
+    if (!staged) {
+      const input = this.page.locator(this.sel.attachInput).first();
+      if (await input.count().catch(() => 0)) {
+        await input.setInputFiles(file, { timeout: 8000 }).catch((e) => { notes.push('file box: ' + String(e.message || e).slice(0, 80)); });
+        staged = await waitStaged();
+        if (!notes.some(n => n.startsWith('file box:') && n.length > 12)) notes.push('file box: ' + (staged ? 'staged' : 'set, nothing staged'));
+      } else notes.push('file box: not on this page');
+    }
+    // (4) paste, then drop, the file itself into the compose area
+    if (!staged) {
+      try {
+        const b64 = fs.readFileSync(file).toString('base64');
+        const paste = async (how) => this.page.evaluate(({ b64, name, mime, composerSel, rootSel, how }) => {
+          const bin = atob(b64); const arr = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+          const f = new File([arr], name, { type: mime });
+          const dt = new DataTransfer(); dt.items.add(f);
+          const box = document.querySelector(composerSel);
+          const root = document.querySelector(rootSel) || box || document.body;
+          if (how === 'paste') { if (box) { box.focus(); box.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); } }
+          else { for (const t of ['dragenter', 'dragover', 'drop']) root.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true })); }
+          return true;
+        }, { b64, name, mime, composerSel: this.sel.composer, rootSel: this.sel.composeRoot, how });
+        await paste('paste'); staged = await waitStaged();
+        notes.push('paste: ' + (staged ? 'staged' : 'nothing staged'));
+        if (!staged) { await paste('drop'); staged = await waitStaged(); notes.push('drop: ' + (staged ? 'staged' : 'nothing staged')); }
+      } catch (e) { notes.push('paste/drop: ' + String(e.message || e).slice(0, 80)); }
+    }
+    if (!staged) throw new Error('the file never appeared in the compose box [' + notes.join('; ') + ']');
+    // bigger files need a moment between staging and Send, and time to show as sent after (1.1.4: scaled)
     await sleep(Math.min(10000, (this.opts.attachWaitMs ?? 1500) + Math.round(mb * 400)));
     const send = this.page.locator(this.sel.sendButton).first();
     if (await send.count()) await send.click({ timeout: 8000 }).catch(() => this.page.locator(this.sel.composer).first().press('Enter'));
@@ -848,7 +912,7 @@ export class GoogleMessagesWeb extends EventEmitter {
       if (now.length > before.length || (now.length && now[now.length - 1].id && now[now.length - 1].id !== lastId)) { await sleep(this.opts.betweenSendsMs ?? 700); return true; }
       await sleep(400);
     }
-    throw new Error('the file did not appear as sent');
+    throw new Error('the file was staged [' + notes.join('; ') + '] but did not appear as sent');
   }
   /** 1.1.4: react to the person's newest incoming message in this chat (RCS reaction on their bubble).
    *  Best effort by design: if Google's hover/picker UI does not match, this throws and the caller drops it —
