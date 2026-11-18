@@ -156,12 +156,12 @@ test('Connect accounts: admin adds his Google client; the person connects Google
   assert.equal((await c.post('/api/u/connect/google')).status, 409, 'not set up yet');
   const api = client(base); await api.post('/api/login/password', { username: 'admin', password: 'pass-108-abcdef' });
   assert.equal((await api.post('/api/integrations/google', { client_id: 'nope' })).status, 400);
-  let g = (await api.post('/api/integrations/google', { client_id: '1234-abc.apps.googleusercontent.com', client_secret: 'test-secret-1234567' })).data.google;
+  let g = (await api.post('/api/integrations/google', { client_id: '123456789012-abc.apps.googleusercontent.com', client_secret: 'test-secret-1234567' })).data.google;
   assert.equal(g.ready, true); assert.equal(g.redirect_uri, 'https://msg.example.com/oauth/google/callback');
   assert.equal(JSON.stringify((await api.get('/api/integrations')).data).includes('test-secret'), false, 'the secret never comes back');
   const st = (await c.post('/api/u/connect/google')).data;
   const au = new URL(st.url);
-  assert.equal(au.searchParams.get('client_id'), '1234-abc.apps.googleusercontent.com');
+  assert.equal(au.searchParams.get('client_id'), '123456789012-abc.apps.googleusercontent.com');
   assert.equal(au.searchParams.get('redirect_uri'), 'https://msg.example.com/oauth/google/callback');
   assert.match(au.searchParams.get('scope'), /gmail\.readonly/); assert.doesNotMatch(au.searchParams.get('scope'), /gmail\.send|gmail\.modify|auth\/calendar(\s|$)|auth\/drive(\s|$)/);
   assert.equal(au.searchParams.get('access_type'), 'offline');

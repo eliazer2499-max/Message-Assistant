@@ -61,6 +61,7 @@ export const SELECTORS = {
   signInButton: 'button:has-text("Sign in"), a:has-text("Sign in"), button:has-text("Sign In")',
   // 1.0.2: pictures. A file box if the page has one, else the attach button's file chooser.
   attachInput: 'mws-message-compose input[type="file"], input[type="file"][accept*="image" i], input[type="file"]',
+  attachPreview: 'mws-message-compose img[src^="blob:"], mws-message-compose [data-e2e-attachment], [data-e2e-attachment-preview], mws-attachment-thumbnail, mws-message-compose [aria-label*="Remove" i]',
   attachButton: '[data-e2e-picker-button="ATTACHMENT"], button[aria-label*="Attach" i], button[aria-label*="Add media" i], button[aria-label*="file" i]',
   // 1.1.4: reactions — hovering a message shows its actions (react / reply / more); the picker that opens holds
   // the emoji buttons. Google's page can change: if these stop matching, reactions quietly stop (texts never do).
@@ -743,15 +744,15 @@ export class GoogleMessagesWeb extends EventEmitter {
       let id = convId;
       if (!id) id = await this.newChat(phone);
       await this.openChat(id);
-      // 1.0.2: a picture first; if this page won't take it, its private link goes as text instead (never lost)
-      // 1.1.4: AUDIO never falls back to a link — the people using this have no internet, so a link to a voice
-      // note is worthless to them (Abish got links instead of the audio). Fail instead: the outbox retries, and
-      // attachAndSend now waits properly for bigger files (the old fixed waits were too short for audio).
+      // 1.0.2 had pictures fall back to their private link as text when the page would not take the file;
+      // 1.1.4 removed that for AUDIO; 1.1.5 removes it for EVERYTHING — Abish got the YouTube thumbnail as a
+      // bare link (msg.…/thumbnail.jpg) instead of the picture. The people using this have no internet: a link
+      // is never the file. Fail instead: the outbox retries, and attachAndSend verifies the file is really
+      // staged before pressing Send (below).
       if (media && !skipParts) {
         let ok = false;
         try { await this.attachAndSend(media); ok = true; } catch (e) { this.lastAttachError = String(e.message || e).slice(0, 200); }
-        if (!ok && isAudioFile(media)) { const e = new Error('the audio file could not be attached in Google Messages: ' + this.lastAttachError); e.partsDone = skipParts; e.convId = id; throw e; }
-        if (!ok && mediaUrl) text = (text ? text + '\n' : '') + mediaUrl;
+        if (!ok) { const e = new Error(`the ${isAudioFile(media) ? 'audio file' : 'file'} could not be attached in Google Messages: ` + this.lastAttachError); e.partsDone = skipParts; e.convId = id; throw e; }
       }
       // 1.0.7: each part must show up in the chat as sent (not "Sending…") before the next one; a part that
       // did not tells the outbox which parts already went (partsDone), so a retry never repeats them
@@ -816,18 +817,27 @@ export class GoogleMessagesWeb extends EventEmitter {
     const outs = async () => (await this.snap()).msgs.filter(m => m.outgoing);
     const before = await outs();
     const lastId = before.length ? before[before.length - 1].id : '';
+    let mb = 0; try { mb = fs.statSync(file).size / 1048576; } catch {}
+    // 1.1.5: hand the file over, then CHECK it is really staged (a preview chip / blob picture appears in the
+    // compose area) before pressing Send. If the hidden-input path staged nothing visible, use the attach
+    // button's file chooser. If a path handed the file over but no preview selector matches this page, still
+    // try Send — the confirm below is the final judge. (Before, Send was pressed blind: when nothing was
+    // staged the send "failed" and the caller fell back to texting the file's link.)
+    const stagedShown = async () => (await this.page.locator(this.sel.attachPreview).first().count().catch(() => 0)) > 0;
+    const waitStaged = async () => { const end = Date.now() + Math.min(12000, 3000 + Math.round(mb * 400)); while (Date.now() < end) { if (await stagedShown()) return true; await sleep(300); } return stagedShown(); };
+    let handed = false, shown = false;
     const input = this.page.locator(this.sel.attachInput).first();
-    if (await input.count()) await input.setInputFiles(file, { timeout: 8000 });
-    else {
+    if (await input.count()) { await input.setInputFiles(file, { timeout: 8000 }).catch(() => {}); handed = true; shown = await waitStaged(); }
+    if (!shown) {
       const btn = this.page.locator(this.sel.attachButton).first();
-      if (!(await btn.count())) throw new Error('no attach button on this page');
-      const [chooser] = await Promise.all([this.page.waitForEvent('filechooser', { timeout: 8000 }), btn.click({ timeout: 5000 })]);
-      await chooser.setFiles(file);
+      if (await btn.count()) {
+        try { const [chooser] = await Promise.all([this.page.waitForEvent('filechooser', { timeout: 8000 }), btn.click({ timeout: 5000 })]); await chooser.setFiles(file); handed = true; shown = await waitStaged(); }
+        catch { if (!handed) throw new Error('no attach button on this page'); }
+      } else if (!handed) throw new Error('no attach button on this page');
     }
     // 1.1.4: bigger files (voice notes, not screenshots) need time to become a sendable preview before Send is
     // pressed, and time to show as sent after — scale both waits with the file size (the fixed 1.5 s / 25 s
     // were too short for audio, which is why audio "failed" and went out as a link)
-    let mb = 0; try { mb = fs.statSync(file).size / 1048576; } catch {}
     await sleep(Math.min(10000, (this.opts.attachWaitMs ?? 1500) + Math.round(mb * 400)));
     const send = this.page.locator(this.sel.sendButton).first();
     if (await send.count()) await send.click({ timeout: 8000 }).catch(() => this.page.locator(this.sel.composer).first().press('Enter'));

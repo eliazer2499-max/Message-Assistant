@@ -27,7 +27,7 @@ test('site picture: phone size (390×844 at 2×), the site\'s own CSS, and priva
   spy.close(); await B.shutdown();
 });
 
-test('pictures through the real Messages driver: attached, or the private link when the page has no file box', { skip: canRun ? false : 'no Playwright/Chromium here', timeout: 120000 }, async () => {
+test('pictures through the real Messages driver: attached — and NEVER a link when the page has no file box (1.1.5)', { skip: canRun ? false : 'no Playwright/Chromium here', timeout: 120000 }, async () => {
   st.mode = 'connected';
   const { GoogleMessagesWeb } = await import('../src/channels/gmweb.js');
   const seen = new Set();
@@ -42,7 +42,8 @@ test('pictures through the real Messages driver: attached, or the private link w
     assert.ok(out.some(m => m.media === 'pic.png'), 'the picture was attached: ' + JSON.stringify(out.slice(-3)));
     assert.equal(out.at(-1).text, 'Here it is');
     st.noAttach = true;
-    await gm.send({ convId: '101', text: 'Second', media: img, mediaUrl: 'https://msg.example.com/m/tok/site.png' });
-    assert.equal(conv().msgs.filter(m => m.out).at(-1).text, 'Second\nhttps://msg.example.com/m/tok/site.png', 'fell back to the link');
+    await assert.rejects(() => gm.send({ convId: '101', text: 'Second', media: img, mediaUrl: 'https://msg.example.com/m/tok/site.png' }), /could not be attached/);
+    assert.ok(!conv().msgs.some(m => /example\.com/.test(m.text || '')), 'no link was texted instead of the picture');
+    assert.equal(conv().msgs.filter(m => m.out).at(-1).text, 'Here it is', 'nothing new went out');
   } finally { st.noAttach = false; await gm.stop(); }
 });

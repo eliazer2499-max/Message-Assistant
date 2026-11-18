@@ -384,9 +384,11 @@ $('#sSave').onclick = async () => {
 };
 
 // ---------------- settings ----------------
+let GOOGLE_HAS_SECRET = false;   // 1.1.5: Save must know whether a secret is already stored (the box is always shown empty)
 async function loadGoogle() {
   try {
     const { google: g, google_enabled } = await GET('/api/integrations');
+    GOOGLE_HAS_SECRET = !!g.has_secret;
     $('#gEnabled').checked = google_enabled !== false;
     $('#gRedirect').textContent = g.redirect_uri; $('#gId').value = g.client_id || '';
     $('#gSecret').placeholder = g.has_secret ? '(saved — paste a new one to change)' : 'paste the Client secret';
@@ -400,8 +402,16 @@ $('#gEnabled').onchange = async () => {
   catch (er) { $('#gMsg').textContent = er.message; $('#gMsg').className = 'msg err'; }
 };
 $('#gSave').onclick = async () => {
-  try { await POST('/api/integrations/google', { client_id: $('#gId').value, ...( $('#gSecret').value ? { client_secret: $('#gSecret').value } : {}) }); $('#gSecret').value = ''; $('#gMsg').textContent = 'Saved.'; $('#gMsg').className = 'msg ok'; loadGoogle(); }
-  catch (er) { $('#gMsg').textContent = er.message; $('#gMsg').className = 'msg err'; }
+  const say = (t, ok) => { $('#gMsg').textContent = t; $('#gMsg').className = 'msg ' + (ok ? 'ok' : 'err'); $('#gMsg').scrollIntoView({ block: 'nearest' }); };
+  const id = $('#gId').value.trim(), sec = $('#gSecret').value;
+  if (!id) { say('Paste the Client ID first — it comes from Google Cloud → Credentials.', false); return; }
+  if (!sec && !GOOGLE_HAS_SECRET) { say('Paste the Client secret too — the ID alone does not turn Google connect on. Both are on the same Google Cloud screen.', false); return; }   // 1.1.5: an ID-only save used to say "Saved." and change nothing — that read as "it doesn't work"
+  try {
+    const r = await POST('/api/integrations/google', { client_id: id, ...(sec ? { client_secret: sec } : {}) });
+    $('#gSecret').value = '';
+    say(r.google && r.google.ready ? 'Saved — Google connect is ON ✓ People can now connect their Google accounts.' : 'Saved.', true);
+    loadGoogle();
+  } catch (er) { say(er.message, false); }
 };
 async function loadSpeed() {
   try {
