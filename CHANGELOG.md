@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.7 — 2026-11-18
+- **Never silence.** When a picture or voice note could not be sent, the person who asked for it heard nothing — it looked exactly like being ignored (only the dashboard was told). Now a file gets 3 tries, and if it still cannot go through, the person gets a plain text saying so and inviting them to ask again. At most one such note per person per 10 minutes.
+- **One attach attempt is capped at about 90 seconds.** The Messages page is shared by everyone; a hopeless attach could sit on it for minutes, holding up other people's texts and new messages behind it. Now it gives up, names the step that failed, and frees the page.
+
 ## 1.1.6 — 2026-11-18
 - **Pictures and voice notes now go out every way the page allows.** On the real Messages page the file could silently never reach the compose box, so the picture simply never arrived. Attaching was rebuilt: the sender now tries, in order, the attach button's file picker (including its menu), the Ctrl+K / Ctrl+Shift+A shortcut's picker, the hidden file box, and pasting — then dropping — the file itself into the compose box, and it **checks the file's preview is showing before pressing Send**. If a way fails, the next is tried. And when nothing works, the failure now names each step that was tried, so the Activity log says exactly what the page did instead of a silent nothing. Proven in a real browser against pages that allow only one route each (picker only, paste only, file box only).
 

@@ -101,14 +101,26 @@ export async function drain() {
     }
   } finally { busy = false; }
 }
+// 1.1.7: when a picture / voice note finally cannot be sent, the person is told in plain words — never met
+// with silence (they have no internet; a missing file with no word reads as "the assistant is ignoring me").
+// At most one such note per person per 10 minutes, however many files failed.
+const lastMediaNote = new Map();
 function fail(m, e) {
   const tries = get('SELECT tries FROM outbox WHERE id=?', m.id).tries;
   log('outbox', `send #${m.id} failed (${tries}):`, e.message);
-  if (tries >= maxTries(m.kind)) {
+  const limit = m.media ? 3 : maxTries(m.kind);      // 1.1.7: files get 3 tries, not 6 — fail faster, tell the person sooner
+  if (tries >= limit) {
     holdUntil.delete(m.id);
     run("UPDATE outbox SET status='failed', error=? WHERE id=?", String(e.message).slice(0, 300), m.id);
     audit('system', 'outbox.failed', `#${m.id} (${m.kind}): ${e.message}`);
     if (m.kind !== 'admin' && m.kind !== 'code') onFail?.(m, e);
+    if (m.media && m.user_id) {
+      const last = lastMediaNote.get(m.user_id) || 0;
+      if (Date.now() - last > 600000) {
+        lastMediaNote.set(m.user_id, Date.now());
+        enqueueText({ userId: m.user_id, text: 'I tried to send you that picture / voice note, but it would not go through on text. Sorry about that — ask me again and I will try once more, or ask me anything else and I will answer in words.', kind: 'notice' });
+      }
+    }
   } else { holdUntil.set(m.id, Date.now() + retryWait(tries)); run("UPDATE outbox SET status='queued', error=? WHERE id=?", String(e.message).slice(0, 300), m.id); }
 }
 /** One due 'unconfirmed' text: look at its chat. Returns true when it handled one. */

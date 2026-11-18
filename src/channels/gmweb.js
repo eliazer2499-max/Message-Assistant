@@ -830,6 +830,10 @@ export class GoogleMessagesWeb extends EventEmitter {
     // (4) pasting / dropping the file into the compose box (Messages supports both). The steps tried are
     // named in the error when all fail, so the Activity log says exactly what the page did.
     const notes = [];
+    // 1.1.7: one attach attempt gets at most ~90 s in total. This page is shared by everyone — a hopeless
+    // attach must not sit on it for minutes while other people's texts and new messages wait behind it.
+    const deadline = Date.now() + (this.opts.attachDeadlineMs ?? 90000);
+    const outOfTime = () => Date.now() >= deadline;
     const stagedShown = async () => {
       if ((await this.page.locator(this.sel.attachPreview).first().count().catch(() => 0)) > 0) return true;
       return this.page.evaluate((n) => {
@@ -842,7 +846,7 @@ export class GoogleMessagesWeb extends EventEmitter {
         });
       }, name).catch(() => false);
     };
-    const waitStaged = async () => { const end = Date.now() + Math.min(12000, 3000 + Math.round(mb * 400)); while (Date.now() < end) { if (await stagedShown()) return true; await sleep(300); } return stagedShown(); };
+    const waitStaged = async () => { const end = Math.min(deadline, Date.now() + Math.min(12000, 3000 + Math.round(mb * 400))); while (Date.now() < end) { if (await stagedShown()) return true; await sleep(300); } return stagedShown(); };
     const chooserMs = this.opts.chooserMs ?? 6000;
     let staged = false;
     // (1) the attach button → file chooser (a menu item first, when the button opens a menu)
@@ -860,7 +864,7 @@ export class GoogleMessagesWeb extends EventEmitter {
       } catch (e) { notes.push('attach button: ' + String(e.message || e).slice(0, 80)); }
     } else notes.push('attach button: not on this page');
     // (2) the keyboard shortcut's chooser (Ctrl+K, then Ctrl+Shift+A)
-    if (!staged) for (const keys of ['Control+k', 'Control+Shift+a']) {
+    if (!staged && !outOfTime()) for (const keys of ['Control+k', 'Control+Shift+a']) {
       try {
         await this.page.locator(this.sel.composer).first().click({ timeout: 3000 }).catch(() => {});
         const chooserP = this.page.waitForEvent('filechooser', { timeout: chooserMs });
@@ -873,7 +877,7 @@ export class GoogleMessagesWeb extends EventEmitter {
       } catch (e) { notes.push(`shortcut ${keys}: no chooser`); }
     }
     // (3) the hidden file box
-    if (!staged) {
+    if (!staged && !outOfTime()) {
       const input = this.page.locator(this.sel.attachInput).first();
       if (await input.count().catch(() => 0)) {
         await input.setInputFiles(file, { timeout: 8000 }).catch((e) => { notes.push('file box: ' + String(e.message || e).slice(0, 80)); });
@@ -882,7 +886,7 @@ export class GoogleMessagesWeb extends EventEmitter {
       } else notes.push('file box: not on this page');
     }
     // (4) paste, then drop, the file itself into the compose area
-    if (!staged) {
+    if (!staged && !outOfTime()) {
       try {
         const b64 = fs.readFileSync(file).toString('base64');
         const paste = async (how) => this.page.evaluate(({ b64, name, mime, composerSel, rootSel, how }) => {
@@ -900,7 +904,7 @@ export class GoogleMessagesWeb extends EventEmitter {
         if (!staged) { await paste('drop'); staged = await waitStaged(); notes.push('drop: ' + (staged ? 'staged' : 'nothing staged')); }
       } catch (e) { notes.push('paste/drop: ' + String(e.message || e).slice(0, 80)); }
     }
-    if (!staged) throw new Error('the file never appeared in the compose box [' + notes.join('; ') + ']');
+    if (!staged) throw new Error('the file never appeared in the compose box [' + notes.join('; ') + (outOfTime() ? '; out of time — stopped trying' : '') + ']');
     // bigger files need a moment between staging and Send, and time to show as sent after (1.1.4: scaled)
     await sleep(Math.min(10000, (this.opts.attachWaitMs ?? 1500) + Math.round(mb * 400)));
     const send = this.page.locator(this.sel.sendButton).first();
