@@ -29,7 +29,7 @@ const PUBLIC = path.join(APP_DIR, 'public');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 const EDITABLE = ['assistant_name', 'timezone', 'waiting_text', 'welcome_text', 'busy_text', 'daily_limit', 'max_steps', 'job_minutes', 'history_messages', 'max_parallel',
   'browser_enabled', 'browser_job_seconds', 'browser_parallel', 'alert_webhook', 'model', 'update_notify', 'portal_enabled',
-  'expired_text', 'tool_rounds', 'fast_chat', 'google_client_id', 'connection_texts'];     // 1.0.8
+  'expired_text', 'tool_rounds', 'fast_chat', 'google_client_id', 'connection_texts', 'allow_own_google_client'];     // 1.0.8 (+ own keys toggle 1.1.3)
 
 function send(res, status, body, headers = {}) {
   const h = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
@@ -77,7 +77,7 @@ on('GET', /^\/api\/overview$/, async () => ({
   people: { pending: get("SELECT COUNT(*) AS n FROM users WHERE status='pending'").n, approved: get("SELECT COUNT(*) AS n FROM users WHERE status='approved'").n, blocked: get("SELECT COUNT(*) AS n FROM users WHERE status='blocked'").n },
   keys: aikeys.listKeys().map(k => ({ id: k.id, name: k.name, status: k.status })), queue: queueStats(), browser: B.stats(),
   sites: { waiting: SITES.waitingForAdmin().length, published: get('SELECT COUNT(*) AS n FROM sites').n }, update: upd.badge(),
-  google: (() => { const g = INTEG.googleSetup(); return { ready: g.ready, connected: g.connected }; })(),     // 1.1.1: Home warns when Connect accounts was never set up
+  google: (() => { const g = INTEG.googleSetup(); return { ready: g.ready, connected: g.connected, own_allowed: INTEG.ownAllowed() }; })(),     // 1.1.1: Home warns when Connect accounts was never set up
   today: get('SELECT COALESCE(SUM(messages),0) AS messages, COALESCE(SUM(replies),0) AS replies, COALESCE(SUM(model_calls),0) AS model_calls FROM usage WHERE day=?', users.today()),
 }));
 on('POST', /^\/api\/alerts\/clear$/, async (req, { b }) => { clearAlerts(b.id || null); return { ok: true }; });
@@ -99,7 +99,7 @@ on('POST', /^\/api\/users\/(\d+)\/remove$/, async (req, { m }) => { B.forgetUser
 on('POST', /^\/api\/users\/(\d+)$/, async (req, { m, b }) => ({ user: users.publicUser(users.updateUser(Number(m[1]), b)) }));
 // 1.0.8: access until a date: { months: 1 } | { until: 'YYYY-MM-DD' } | { until: null } (no end)
 on('POST', /^\/api\/users\/(\d+)\/access$/, async (req, { m, b }) => ({ user: users.publicUser(users.setAccessUntil(Number(m[1]), b || {})) }));
-on('GET', /^\/api\/integrations$/, async () => ({ google: INTEG.googleSetup() }));
+on('GET', /^\/api\/integrations$/, async () => ({ google: INTEG.googleSetup(), own_allowed: INTEG.ownAllowed() }));
 on('POST', /^\/api\/integrations\/google$/, async (req, { b }) => ({ google: INTEG.setGoogleClient(b || {}) }));
 // 1.1.0: no "My chats" from the dashboard. The admin's own chats are reached only by signing in with his phone number
 // (a code by text); the password sign-in opens the dashboard and nothing private.
@@ -172,8 +172,10 @@ U('POST', /^\/api\/u\/login\/verify$/, async (req, { b }) => {
 U('POST', /^\/api\/u\/logout$/, async (req, { usid }) => { portal.endSession(usid); return { __headers: { 'Set-Cookie': `msa_uid=; Max-Age=0; ${ucookie()}` }, ok: true }; }, { open: true });
 U('GET', /^\/api\/u\/chat$/, async (req, { usession, url }) => ({ items: portal.chat(usession.user_id, Number(url.searchParams.get('after')) || 0, 200, Number(url.searchParams.get('before')) || 0), now: Date.now(), oldest: portal.oldestTs(usession.user_id) }));
 // 1.0.8: Connect accounts (his own Google…), and "Manage system" for the admin
-U('GET', /^\/api\/u\/connections$/, async (req, { usession }) => ({ connections: INTEG.list(usession.user_id), google_ready: INTEG.googleSetup().ready }));
+U('GET', /^\/api\/u\/connections$/, async (req, { usession }) => { const eff = INTEG.effectiveClient(usession.user_id); return { connections: INTEG.list(usession.user_id), google_ready: eff.ready, google_via: eff.via, own_allowed: eff.own_allowed, own_client: eff.own, system_ready: eff.system_ready, redirect_uri: eff.redirect_uri }; });
 U('POST', /^\/api\/u\/connect\/google$/, async (req, { usession }) => INTEG.startGoogle(usession.user_id, '/me'));
+U('POST', /^\/api\/u\/connect\/own-client$/, async (req, { usession, b }) => { if (!INTEG.ownAllowed()) throw Object.assign(new Error('The admin has turned off connecting with your own keys.'), { status: 403 }); return INTEG.setOwnClient(usession.user_id, b || {}); });
+U('POST', /^\/api\/u\/connect\/own-client\/remove$/, async (req, { usession }) => INTEG.removeOwnClient(usession.user_id));
 U('POST', /^\/api\/u\/connections\/(\d+)\/remove$/, async (req, { usession, m }) => INTEG.disconnect(usession.user_id, m[1]));
 U('POST', /^\/api\/u\/manage$/, async (req, { usession }) => {
   if (!users.isAdminPhone(usession.user.phone)) throw Object.assign(new Error('Only the admin can open Manage system.'), { status: 403 });

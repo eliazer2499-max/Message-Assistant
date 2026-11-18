@@ -62,6 +62,20 @@
           <p class="muted small" id="gHelp">Ask things like “what’s on my calendar tomorrow?” or “any new email from the school?”</p>
           <button class="primary" id="gConnect" type="button">Connect Google</button>
           <p class="muted small hidden" id="gNotReady">Google connect is not set up yet. The admin turns it on in Manage system → Settings → Connect accounts.</p>
+          <div id="ownKeys" class="hidden">
+            <p class="muted small" id="ownState"></p>
+            <details class="help"><summary>Use your own Google keys (free, about 5 minutes)</summary>
+              <ol class="steps">
+                <li>Open <b>console.cloud.google.com</b>, make a project, and enable the <b>Gmail</b>, <b>Google Calendar</b> and <b>Google Drive</b> APIs.</li>
+                <li>Set up the <b>OAuth consent screen</b> (External, your email as support/contact).</li>
+                <li><b>Credentials → Create credentials → OAuth client ID → Web application</b>. Under <b>Authorized redirect URIs</b> add exactly: <code id="ownRedirect">…</code></li>
+                <li>Paste the <b>Client ID</b> and <b>Client secret</b> here and press Save, then tap Connect Google.</li>
+              </ol>
+            </details>
+            <label>Your Client ID<input id="ownId" placeholder="1234-abc.apps.googleusercontent.com" autocomplete="off"></label>
+            <label>Your Client secret<input id="ownSecret" type="password" placeholder="paste the Client secret" autocomplete="off"></label>
+            <div class="row"><button id="ownSave" type="button">Save my keys</button><button class="ghost hidden" id="ownRemove" type="button">Remove my keys</button></div>
+          </div>
         </div>
         <div class="card acc soon">
           <div class="acchead"><span class="gmark other" aria-hidden="true">+</span><div><b>More accounts</b><div class="muted small">Other kinds of accounts can be added here later.</div></div></div>

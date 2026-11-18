@@ -44,6 +44,51 @@ export function setGoogleClient({ client_id, client_secret }, actor = 'admin') {
   return googleSetup();
 }
 
+// ---------- 1.1.3: a person's OWN Google keys, or the system's (Abish: "allow a user to connect their own api
+// keys or use the system ones — an option in admin to turn on or off") ----------
+// Connecting needs a Google OAuth client. Until now only the admin's (system) client worked, so when the admin
+// never set it up, Connect was a dead end for everyone (the screenshot: "Google connect is not set up yet").
+// Now each person may ALSO paste their own Client ID + secret (their own free Google Cloud project) on their
+// page; their connections then run on their keys. The admin toggle (Settings → Connect accounts) is ON by
+// default so it works out of the box; turning it off leaves only the system keys.
+export const ownAllowed = () => setting('allow_own_google_client') !== '0';
+const SEC_OWN = (uid) => 'google_client_secret_u' + Number(uid);
+const ownIdKey = (uid) => 'google_client_id_u' + Number(uid);
+export function ownClient(userId) {
+  const id = String(setting(ownIdKey(userId)) || '').trim();
+  return { client_id: id, has_secret: hasSecret(SEC_OWN(userId)), ready: !!(id && hasSecret(SEC_OWN(userId))) };
+}
+/** Whose keys a connect for this person will use: their own (when allowed and saved) or the system's. */
+export function effectiveClient(userId) {
+  const own = ownClient(userId), sys = googleSetup(), allowed = ownAllowed();
+  const eff = allowed && own.ready ? { via: 'own', client_id: own.client_id, ready: true }
+    : sys.ready ? { via: 'system', client_id: sys.client_id, ready: true }
+    : { via: null, client_id: '', ready: false };
+  return { ...eff, own_allowed: allowed, own: { client_id: own.client_id, has_secret: own.has_secret, ready: own.ready },
+    system_ready: sys.ready, redirect_uri: redirectUri(), https: sys.https };
+}
+function clientCreds(userId, via) {
+  return via === 'own' ? { client_id: String(setting(ownIdKey(userId)) || ''), client_secret: secret(SEC_OWN(userId)) || '' }
+    : { client_id: String(setting('google_client_id') || ''), client_secret: secret(SEC_CLIENT) || '' };
+}
+export function setOwnClient(userId, { client_id, client_secret }) {
+  if (client_id !== undefined) {
+    const v = String(client_id || '').trim();
+    if (v && !/^[\w.-]+\.apps\.googleusercontent\.com$/.test(v)) throw Object.assign(new Error('The Client ID ends with .apps.googleusercontent.com — copy it from your Google Cloud → Credentials.'), { status: 400 });
+    run('INSERT INTO settings(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v', ownIdKey(userId), v);
+  }
+  if (client_secret) { const v = String(client_secret).trim(); if (v.length < 10) throw Object.assign(new Error('That secret looks too short.'), { status: 400 }); setSecret(SEC_OWN(userId), v); rememberSecret(v); }
+  audit('user#' + userId, 'google.ownclient', 'own Google keys saved');
+  return effectiveClient(userId);
+}
+export function removeOwnClient(userId) {
+  run('DELETE FROM settings WHERE k=?', ownIdKey(userId)); run('DELETE FROM secrets WHERE k=?', SEC_OWN(userId));
+  for (const c of all("SELECT id FROM connections WHERE user_id=? AND provider='google' AND client='own'", Number(userId))) run('DELETE FROM secrets WHERE k=?', SEC_TOK(c.id));
+  run("DELETE FROM connections WHERE user_id=? AND provider='google' AND client='own'", Number(userId));
+  audit('user#' + userId, 'google.ownclient', 'own Google keys removed (their connections went with them)');
+  return effectiveClient(userId);
+}
+
 // ---------- a person connects ----------
 export function list(userId) {
   return all('SELECT id, provider, account, status, created, last_used, error FROM connections WHERE user_id=? ORDER BY id', Number(userId))
@@ -51,12 +96,14 @@ export function list(userId) {
 }
 export function hasGoogle(userId) { return !!get("SELECT 1 AS x FROM connections WHERE user_id=? AND provider='google' AND status='connected'", Number(userId)); }
 export function startGoogle(userId, back = '/me') {
-  const st = googleSetup();
-  if (!st.ready) throw Object.assign(new Error('Google connect is not set up yet. The admin adds a Google Client ID and secret in Settings → Connect accounts.'), { status: 409 });
+  const eff = effectiveClient(userId);
+  if (!eff.ready) throw Object.assign(new Error(eff.own_allowed
+    ? 'No Google keys yet: add your own Client ID and secret below (free, 5 minutes), or ask the admin to set up the system keys.'
+    : 'Google connect is not set up yet. The admin adds a Google Client ID and secret in Settings → Connect accounts.'), { status: 409 });
   run('DELETE FROM oauth_states WHERE created<?', now() - 60 * 60000);   // 1.1.1: a connect try lives an hour (Google's consent + "unverified app" screens can take a while; 15 min ran out and the connect "didn't work")
   const state = crypto.randomBytes(24).toString('base64url');
-  run('INSERT INTO oauth_states(state, user_id, provider, created, back) VALUES(?,?,?,?,?)', state, Number(userId), 'google', now(), back === '/' ? '/' : '/me');
-  const q = new URLSearchParams({ client_id: st.client_id, redirect_uri: st.redirect_uri, response_type: 'code', scope: PROVIDERS.google.scopes.join(' '),
+  run('INSERT INTO oauth_states(state, user_id, provider, created, back, via) VALUES(?,?,?,?,?,?)', state, Number(userId), 'google', now(), back === '/' ? '/' : '/me', eff.via);
+  const q = new URLSearchParams({ client_id: eff.client_id, redirect_uri: eff.redirect_uri, response_type: 'code', scope: PROVIDERS.google.scopes.join(' '),
     access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true', state });
   return { url: G.auth() + '?' + q.toString() };
 }
@@ -72,7 +119,8 @@ export async function finishGoogle({ code, state, error }) {
   if (row) run('DELETE FROM oauth_states WHERE state=?', row.state);
   if (!row || now() - row.created > 60 * 60000) throw Object.assign(new Error('This connect link is old. Go back and tap Connect Google again.'), { status: 400 });
   if (error) throw Object.assign(new Error(error === 'access_denied' ? 'You said no on the Google page, so nothing was connected.' : 'Google said: ' + String(error).slice(0, 80)), { status: 400, back: row.back });
-  const tok = await postForm(G.token(), { code: String(code || ''), client_id: setting('google_client_id'), client_secret: secret(SEC_CLIENT) || '', redirect_uri: redirectUri(), grant_type: 'authorization_code' });
+  const creds = clientCreds(row.user_id, row.via || 'system');   // 1.1.3: exchange the code with the same keys the connect started with
+  const tok = await postForm(G.token(), { code: String(code || ''), client_id: creds.client_id, client_secret: creds.client_secret, redirect_uri: redirectUri(), grant_type: 'authorization_code' });
   let account = '';
   try { const r = await fetch(G.userinfo(), { headers: { Authorization: 'Bearer ' + tok.access_token }, signal: AbortSignal.timeout(15000) }); const j = await r.json(); if (r.ok) account = String(j.email || '').slice(0, 200) || (j.sub ? 'google:' + String(j.sub).slice(0, 24) : ''); } catch {}
   // 1.1.1: never save a connection with an empty account: the UNIQUE(user, provider, account) row then collided on
@@ -81,10 +129,10 @@ export async function finishGoogle({ code, state, error }) {
   const t = now();
   const ex = get("SELECT * FROM connections WHERE user_id=? AND provider='google' AND account=?", row.user_id, account);
   const old = ex ? JSON.parse(secret(SEC_TOK(ex.id)) || '{}') : {};
-  const id = ex ? ex.id : Number(run('INSERT INTO connections(user_id, provider, account, scopes, status, created, updated) VALUES(?,?,?,?,?,?,?)', row.user_id, 'google', account, tok.scope || '', 'connected', t, t).lastInsertRowid);
+  const id = ex ? ex.id : Number(run('INSERT INTO connections(user_id, provider, account, scopes, status, created, updated, client) VALUES(?,?,?,?,?,?,?,?)', row.user_id, 'google', account, tok.scope || '', 'connected', t, t, row.via || 'system').lastInsertRowid);
   setSecret(SEC_TOK(id), JSON.stringify({ access_token: tok.access_token, refresh_token: tok.refresh_token || old.refresh_token || '', expires_at: t + (Number(tok.expires_in) || 3600) * 1000 - 60000 }));
   rememberSecret(tok.access_token); if (tok.refresh_token) rememberSecret(tok.refresh_token);
-  run("UPDATE connections SET status='connected', scopes=?, updated=?, error=NULL WHERE id=?", tok.scope || '', t, id);
+  run("UPDATE connections SET status='connected', scopes=?, updated=?, error=NULL, client=? WHERE id=?", tok.scope || '', t, row.via || 'system', id);
   audit('user#' + row.user_id, 'connect.google', account ? account.replace(/^(.).*(@.*)$/, '$1…$2') : 'connected');
   return { back: row.back, account };
 }
@@ -105,7 +153,9 @@ async function accessToken(c) {
   if (tok.access_token && tok.expires_at > now()) return tok.access_token;
   if (!tok.refresh_token) throw Object.assign(new Error('Google needs to be connected again (open your page → Connect accounts).'), { reconnect: true });
   try {
-    const j = await postForm(G.token(), { client_id: setting('google_client_id'), client_secret: secret(SEC_CLIENT) || '', refresh_token: tok.refresh_token, grant_type: 'refresh_token' });
+    const creds = clientCreds(c.user_id, c.client || 'system');   // 1.1.3: refresh with the keys that made this connection
+    if (!creds.client_id || !creds.client_secret) throw Object.assign(new Error('The Google keys for this connection were removed. Connect again on your page.'), { reconnect: true });
+    const j = await postForm(G.token(), { client_id: creds.client_id, client_secret: creds.client_secret, refresh_token: tok.refresh_token, grant_type: 'refresh_token' });
     setSecret(SEC_TOK(c.id), JSON.stringify({ ...tok, access_token: j.access_token, expires_at: now() + (Number(j.expires_in) || 3600) * 1000 - 60000 }));
     rememberSecret(j.access_token);
     return j.access_token;

@@ -77,7 +77,9 @@ async function refreshOverview() {
   const tc = $('#toConnect'); if (tc) tc.onclick = () => go('connect');
   // 1.1.1: if Connect accounts (Google) was never set up, people who tap "Connect Google" on their page hit a dead
   // end ("doesn't work"). Say so here, where the admin can fix it in Settings.
-  if (o.google && !o.google.ready) $('#homeConn').innerHTML += '<p class="muted small">Connect accounts (Google) is <b>not set up yet</b>: on their own page, people see that Google connect is off. To turn it on: Settings → Connect accounts (Google).</p>';
+  if (o.google && !o.google.ready) $('#homeConn').innerHTML += o.google.own_allowed
+    ? '<p class="muted small">The <b>system</b> Google keys are not set up, so people connect with <b>their own keys</b> on their page (that option is on). To give everyone the system keys instead: Settings → Connect accounts (Google).</p>'
+    : '<p class="muted small">Connect accounts (Google) is <b>not set up yet</b>: on their own page, people see that Google connect is off. To turn it on: Settings → Connect accounts (Google).</p>';
   $('#alerts').innerHTML = o.alerts.length ? o.alerts.map(a => `<div class="alert ${a.level}">${esc(a.text)}<div class="muted small">${when(a.ts)}</div></div>`).join('') : '<p class="muted small">No alerts.</p>';
   $('#homeCounts').innerHTML = `<div class="stat"><b>${o.people.pending}</b><span>waiting</span></div><div class="stat"><b>${o.people.approved}</b><span>approved</span></div><div class="stat"><b>${o.today.messages}</b><span>texts today</span></div>`;
   $('#homeKeys').innerHTML = o.keys.length ? o.keys.map(k => `<span class="chip ${k.status}">${esc(k.name)} · ${statusWord(k.status)}</span>`).join('') : '<p class="muted small">No AI keys yet. Add one in the AI keys tab.</p>';
@@ -385,7 +387,8 @@ $('#sSave').onclick = async () => {
 // ---------------- settings ----------------
 async function loadGoogle() {
   try {
-    const { google: g } = await GET('/api/integrations');
+    const { google: g, own_allowed } = await GET('/api/integrations');
+    $('#gOwn').checked = own_allowed !== false;
     $('#gRedirect').textContent = g.redirect_uri; $('#gId').value = g.client_id || '';
     $('#gSecret').placeholder = g.has_secret ? '(saved — paste a new one to change)' : 'paste the Client secret';
     $('#gState').textContent = g.ready ? `On ✓ · ${g.connected} Google account${g.connected === 1 ? '' : 's'} connected` : 'Off — add a Client ID and secret';
@@ -393,6 +396,10 @@ async function loadGoogle() {
     $('#gHttps').textContent = g.https ? '' : 'Note: Google only accepts a redirect address that starts with https:// (your dashboard address). Open the dashboard through its https address so this matches.';
   } catch {}
 }
+$('#gOwn').onchange = async () => {
+  try { await POST('/api/settings', { settings: { allow_own_google_client: $('#gOwn').checked ? '1' : '0' } }); $('#gMsg').textContent = $('#gOwn').checked ? 'Own keys: on.' : 'Own keys: off — only the system keys work.'; $('#gMsg').className = 'msg ok'; }
+  catch (er) { $('#gMsg').textContent = er.message; $('#gMsg').className = 'msg err'; }
+};
 $('#gSave').onclick = async () => {
   try { await POST('/api/integrations/google', { client_id: $('#gId').value, ...( $('#gSecret').value ? { client_secret: $('#gSecret').value } : {}) }); $('#gSecret').value = ''; $('#gMsg').textContent = 'Saved.'; $('#gMsg').className = 'msg ok'; loadGoogle(); }
   catch (er) { $('#gMsg').textContent = er.message; $('#gMsg').className = 'msg err'; }

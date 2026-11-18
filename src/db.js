@@ -68,6 +68,8 @@ export function openDb(file) {
   db.exec(`CREATE TABLE IF NOT EXISTS connections (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, provider TEXT NOT NULL, account TEXT, scopes TEXT,
     status TEXT DEFAULT 'connected', created INTEGER, updated INTEGER, last_used INTEGER, error TEXT, UNIQUE(user_id, provider, account))`);
   db.exec('CREATE TABLE IF NOT EXISTS oauth_states (state TEXT PRIMARY KEY, user_id INTEGER, provider TEXT, created INTEGER, back TEXT)');
+  // 1.1.3: a connection remembers whose Google client made it (the system's, or the person's own keys); the OAuth try remembers it too
+  add('connections', 'client', "TEXT DEFAULT 'system'"); add('oauth_states', 'via', "TEXT DEFAULT 'system'");
   add('outbox', 'parts_done', 'INTEGER DEFAULT 0'); add('outbox', 'check_at', 'INTEGER'); add('outbox', 'checks', 'INTEGER DEFAULT 0'); add('outbox', 'check_text', 'TEXT');
   if (get('PRAGMA user_version').user_version < 2) db.exec('PRAGMA user_version=2');
   return db;

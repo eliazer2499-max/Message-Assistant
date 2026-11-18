@@ -163,6 +163,18 @@ if [ "${MSA_SKIP_BROWSER:-0}" != 1 ]; then
     apt_ffmpeg || { DEBIAN_FRONTEND=noninteractive timeout -k 10 600 apt-get -o DPkg::Lock::Timeout=300 update -q >/dev/null 2>&1; apt_ffmpeg; } \
       || warn "ffmpeg did not install. Media work (extract audio from a video) stays off until: sudo apt-get install ffmpeg"
   fi
+  # 1.1.2: yt-dlp, so the assistant can download a YouTube video's audio and text it as a voice note (the people
+  # using it have no internet). Refreshed when missing or older than 30 days (YouTube changes often).
+  if [ "$DRY" = 1 ]; then echo "[dry-run] install/refresh yt-dlp in /usr/local/bin (if missing or old)"
+  elif [ -x /usr/local/bin/yt-dlp ] && [ -z "$(find /usr/local/bin/yt-dlp -mtime +30 2>/dev/null)" ]; then say "yt-dlp already installed (fresh)"
+  else
+    say "Installing yt-dlp (for YouTube audio)"
+    if curl -fsSL -o /usr/local/bin/yt-dlp.tmp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp 2>/dev/null && [ -s /usr/local/bin/yt-dlp.tmp ]; then
+      chmod +x /usr/local/bin/yt-dlp.tmp && mv /usr/local/bin/yt-dlp.tmp /usr/local/bin/yt-dlp && say "yt-dlp installed: $(/usr/local/bin/yt-dlp --version 2>/dev/null || echo ok)"
+    else
+      rm -f /usr/local/bin/yt-dlp.tmp; warn "yt-dlp did not download. YouTube audio stays off until: sudo curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && sudo chmod +x /usr/local/bin/yt-dlp"
+    fi
+  fi
   # 1.0.6: the virtual screen the browser runs on, visible (Google refuses sign-in from more automated browsers).
   # Installed on every install and update (also "Update now" in the dashboard) when it is missing.
   if [ "$DRY" = 1 ]; then echo "[dry-run] apt-get install -y xvfb (if Xvfb is missing)"

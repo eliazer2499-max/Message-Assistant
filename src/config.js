@@ -22,6 +22,8 @@ export const cfg = {
   cloudflareBase: env.MSA_CLOUDFLARE_BASE || '',  // test override (ends in /client/v4)
   searchBase: env.MSA_SEARCH_BASE || '',          // test override for web_search
   newsBase: env.MSA_NEWS_BASE || '',              // test override for latest_news (Google News RSS)
+  ytdlp: env.MSA_YTDLP || '',                     // yt-dlp binary for youtube_audio (blank = find it)
+  partSeconds: int(env.MSA_PART_SECONDS, 900),    // 1.1.3: voice-note parts: audio longer than this is split (15 min)
   // Google Messages channel: 'web' = the real Playwright driver; 'mock' = in-memory (tests); 'off'
   channel: env.MSA_CHANNEL || 'web',
   gmUrl: (env.MSA_GM_URL || 'https://messages.google.com/web').replace(/\/+$/, ''),

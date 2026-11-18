@@ -45,7 +45,20 @@ function accounts(r) {
   const ready = r.google_ready === true;   // 1.1.1: only a clear "ready" shows the button (a missing/failed answer used to show Connect, which then dead-ended)
   $('#gConnect').classList.toggle('hidden', !ready); $('#gNotReady').classList.toggle('hidden', ready);
   $('#gConnect').textContent = list.length ? 'Connect another Google account' : 'Connect Google';
+  // 1.1.3: your own Google keys, or the system's — the admin chooses if own keys are allowed
+  const ownOk = r.own_allowed !== false, own = r.own_client || {};
+  $('#ownKeys').classList.toggle('hidden', !ownOk);
+  if (ownOk) {
+    $('#ownRedirect').textContent = r.redirect_uri || '';
+    $('#ownId').value = own.client_id || '';
+    $('#ownSecret').placeholder = own.has_secret ? '(saved — paste a new one to change)' : 'paste the Client secret';
+    $('#ownRemove').classList.toggle('hidden', !(own.client_id || own.has_secret));
+    $('#ownState').textContent = r.google_via === 'own' ? 'You connect with your own Google keys.' : r.google_via === 'system' ? 'You connect with the system Google keys.' + (own.ready ? ' (Your own keys are saved too; they are used first — remove them to use the system ones.)' : '') : own.client_id || own.has_secret ? 'Your keys are almost ready — both a Client ID and a secret are needed.' : 'No keys yet: the system keys are not set up, so add your own keys below to connect.';
+    if (!ready) $('#gNotReady').textContent = 'Almost there: add your own Google keys below (free, about 5 minutes), then Connect Google appears.';
+  }
 }
+$('#ownSave').onclick = async () => { try { const r = await api('POST', '/api/u/connect/own-client', { client_id: $('#ownId').value, ...($('#ownSecret').value ? { client_secret: $('#ownSecret').value } : {}) }); $('#ownSecret').value = ''; msg($('#accMsg'), 'Your keys are saved. Now tap Connect Google.', true); accounts(await api('GET', '/api/u/connections')); } catch (er) { msg($('#accMsg'), er.message); } };
+$('#ownRemove').onclick = async () => { if (!confirm('Remove your own Google keys? Accounts you connected with them will be disconnected.')) return; try { await api('POST', '/api/u/connect/own-client/remove'); msg($('#accMsg'), 'Your keys were removed.', true); accounts(await api('GET', '/api/u/connections')); } catch (er) { msg($('#accMsg'), er.message); } };
 $('#gConnect').onclick = async () => { try { const r = await api('POST', '/api/u/connect/google'); location.href = r.url; } catch (er) { msg($('#accMsg'), er.message); } };
 $('#manage').onclick = async () => { try { const r = await api('POST', '/api/u/manage'); location.href = r.go || '/'; } catch (er) { alert(er.message); } };
 $('#earlier').onclick = async () => {
