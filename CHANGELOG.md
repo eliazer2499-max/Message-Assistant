@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.9 — 2026-11-18
+- **Texts that arrive while the server or the phone is away are answered.** The app remembers when it last had a working chat list. After a restart it answers the chats that got a text since then (before, they were dropped as "old history"). Anything older than 3 days is still left alone.
+- **It heals itself when the phone is "not reachable".** After 90 seconds it reloads the Messages page; after 6 minutes it restarts the browser (at most every 15 minutes). Before, it waited, and one outage lasted about 50 hours.
+- **Faster to take the session back and to recover.** "Use here" is tried every minute (was 5 minutes); an unreadable page is reloaded after 1 minute (was 3).
+- **A failed text is not given up in seconds.** Tries are spaced 10 s, 30 s, 2, 5 and 10 minutes apart, and an ordinary reply gets 6 tries (sign-in codes and admin texts still 3).
+- **No chat is forgotten when many change at once.** More than 5 changed chats: the rest are read on the next look.
+- **A reboot just works.** The service waits up to 60 seconds for the internet before it starts, and systemd never stops restarting it. (Update now rewrites the service file.)
+
 ## 1.0.8 — 2026-11-12
 - **Your page: all your chats.** Sign in with your phone number (a 6-digit code by text) and see your whole chat with the assistant, day by day, with "Show earlier messages" back to the first one. Chat from there too. Works on a phone and on a computer.
 - **Connected accounts.** On the same page: **Connect Google** (Gmail, Calendar and Drive, read only). Then ask "what's on my calendar tomorrow?" or "any new email from the school?". The assistant only reads; it never sends, changes or deletes. Each person connects only their own account. The admin turns this on once in Settings → Connect accounts (Google) with a free Google Client ID and secret; the steps are on that card. Other kinds of accounts can be added the same way later.

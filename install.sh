@@ -236,8 +236,11 @@ write_file /etc/systemd/system/messageassistant.service 644 root:root <<EOF
 Description=Message Assistant (multi-user AI assistant over Google Messages)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
+# 1.0.9: after a reboot, wait (up to 60 s) until the internet name lookup works before starting the browser
+ExecStartPre=-/usr/bin/timeout 60 /bin/sh -c 'until getent hosts messages.google.com >/dev/null 2>&1; do sleep 2; done'
 User=$APP_USER
 Group=$APP_USER
 EnvironmentFile=$ETC/env

@@ -163,6 +163,13 @@ export async function waitDevToolsPort(profileDir, child, ms = 30000, given = 0)
   }
   return null;
 }
+/** stability: when this browser last had a working, connected chat list (kept in <dataDir>/gm-alive.json), so texts that
+ *  arrived while the server or the phone was away are answered after a restart instead of dropped as \"old history\". */
+export function readAlive(file) { try { const n = Number(JSON.parse(fs.readFileSync(file, 'utf8')).at); return Number.isFinite(n) && n > 0 ? n : 0; } catch { return 0; } }
+export function staleCutoff({ startedAt, prevAlive = 0, staleMs = 600000, maxBackMs = 3 * 86400000 }) {
+  const since = prevAlive > 0 ? Math.min(startedAt, prevAlive) : startedAt;
+  return Math.max(since, startedAt - maxBackMs) - staleMs;
+}
 const PRIO = { send: 0, input: 1, screen: 2, health: 3, poll: 4 };
 
 export function loadSelectors(dataDir = cfg.dataDir) {
@@ -302,6 +309,8 @@ export class GoogleMessagesWeb extends EventEmitter {
     this.sigs = new Map();          // convId → "snippet|time" last seen
     this.stale = new Map();         // 1.0.8: convId → sig of a chat left alone as history (its last message is older than this start)
     this.startedAt = Date.now();
+    this.aliveFile = path.join(this.dataDir, 'gm-alive.json'); this.prevAlive = readAlive(this.aliveFile); this.aliveAt = 0;
+    this.badSince = 0; this.lastReload = 0; this.lastRestart = 0; this.backlog = [];
     this.wasStale = new Map();      // 1.0.8: convId → the old last-message snippet of a chat that was left alone (only newer texts count)
     this.opened = new Set();        // chats read at least once since start
     this.lastSent = new Map();      // convId → last text we sent (our own message is not "new")
@@ -533,20 +542,40 @@ export class GoogleMessagesWeb extends EventEmitter {
       if (!s) { this.setState('error', 'page not readable: ' + String(e.message).slice(0, 120)); await this.closeBrowser(); return; }
     }
     const c = classifyPage(s, this.sel);
-    if (c.state === 'other_tab' && Date.now() - this.lastUseHere > 5 * 60000) {
+    if (c.state === 'other_tab' && Date.now() - this.lastUseHere > 60000) {
       this.lastUseHere = Date.now();
       try { await this.page.locator(this.sel.useHere).first().click({ timeout: 5000 }); log('gm', 'pressed "Use here"'); await sleep(2000); return this.health(); } catch {}
     }
     if (c.state === 'pairing') { await this.straightToQr(s); await this.readQr(); } else { this.qrData = null; this.qrAt = 0; }
     if (c.state === 'unknown') {
       if (!this.unknownSince) this.unknownSince = Date.now();
-      if (Date.now() - this.unknownSince > 3 * 60000) { log('gm', 'page unclear for 3 min; reloading'); this.unknownSince = 0; await this.page.goto(this.url + '/conversations', { waitUntil: 'domcontentloaded' }).catch(() => {}); }
+      if (Date.now() - this.unknownSince > 60000) { log('gm', 'page unclear for 1 min; reloading'); this.unknownSince = 0; await this.page.goto(this.url + '/conversations', { waitUntil: 'domcontentloaded' }).catch(() => {}); }
       return;
     }
     this.unknownSince = 0;
     if (c.state === 'connected' && !/\/conversations/.test(s.url)) await this.page.goto(this.url + '/conversations', { waitUntil: 'domcontentloaded' }).catch(() => {});
     this.setState(c.state, c.detail);
+    if (await this.selfHeal(c.state)) return;
     if (c.state === 'connected') await this.poll(s);
+  }
+  /** stability: a connection that stays down for a state nobody has to fix by hand (phone not reachable, page unclear)
+   *  is first reloaded (after 90 s), then the whole browser is restarted (after 6 min, at most every 15 min). */
+  async selfHeal(state) {
+    if (!['phone_offline', 'unknown', 'other_tab'].includes(state)) { this.badSince = 0; return false; }
+    const t = Date.now(); if (!this.badSince) this.badSince = t;
+    const down = t - this.badSince;
+    if (down > (this.opts.restartAfterMs ?? 360000) && t - this.lastRestart > (this.opts.restartEveryMs ?? 900000)) {
+      this.lastRestart = t; this.lastReload = t;
+      log('gm', `still ${state} after ${Math.round(down / 1000)} s; restarting the browser`);
+      try { await this.closeBrowser(); await this.ensureBrowser(); } catch (e) { log('gm', 'browser restart failed:', String(e.message).slice(0, 160)); }
+      return true;
+    }
+    if (down > (this.opts.reloadAfterMs ?? 90000) && t - this.lastReload > (this.opts.reloadEveryMs ?? 120000) && this.page && !this.page.isClosed()) {
+      this.lastReload = t; log('gm', `still ${state} after ${Math.round(down / 1000)} s; reloading the page`);
+      await this.page.goto(this.url + '/conversations', { waitUntil: 'domcontentloaded' }).catch(() => {});
+      return true;
+    }
+    return false;
   }
   async readQr() {
     try {
@@ -616,7 +645,9 @@ export class GoogleMessagesWeb extends EventEmitter {
     const c = classifyPage(s, this.sel);
     if (c.state !== 'connected') { this.setState(c.state, c.detail); return; }
     const baseline = this.opts.needsBaseline?.();
+    this.touchAlive();
     const changed = [];
+    const cutoff = staleCutoff({ startedAt: this.startedAt, prevAlive: this.prevAlive, staleMs: this.opts.staleMs ?? 600000 });
     this.names = this.names || new Map();
     for (const v of s.convs) {
       this.names.set(v.id, v.name);
@@ -628,7 +659,7 @@ export class GoogleMessagesWeb extends EventEmitter {
       // 1.0.8: a chat whose newest message is from before this start (minus 10 min) is history, not a new text — even
       // when Google still shows it unread (an old "Stop" spam of Oct 29 was answered after a restart on Nov 12)
       if (this.stale.get(v.id) === sig) continue;
-      if ((before === undefined || !this.firstListDone) && listTimeIsOld(v.time, this.startedAt - (this.opts.staleMs ?? 600000))) {
+      if ((before === undefined || !this.firstListDone) && listTimeIsOld(v.time, cutoff)) {
         this.stale.set(v.id, sig);
         if (v.unread) log('gmweb', `chat ${v.id}: unread but its last message ("${v.time}") is from before this start; left alone`);
         continue;
@@ -638,13 +669,25 @@ export class GoogleMessagesWeb extends EventEmitter {
         const mine = this.lastSent.get(v.id);
         if (!v.unread && mine && (mine.includes(v.snippet.replace(/^You:\s*/i, '')) || v.snippet.startsWith('You:'))) continue;   // our own reply
         changed.push(v);
-      } else if (before === undefined && !this.firstListDone) { /* first look after start: remembered, not opened */ }
+      } else if (before === undefined && !this.firstListDone) {
+        // first look after a start: a chat whose last message is NOT ours and is newer than when we were last alive may
+        // hold a text that came in while we were away (even if Google shows it read): open it (texts already answered are skipped by id)
+        if (this.prevAlive && !/^You:/i.test(v.snippet)) changed.push(v);
+      }
       else if (before === undefined) changed.push(v);            // a brand-new chat appeared at the top
     }
     this.firstListDone = true;
     if (baseline) { this.opts.baselineDone?.(s.convs.length); return; }
     if (process.env.MSA_GM_DEBUG) log('gm', 'poll', JSON.stringify(s.convs), 'changed', changed.map(v => v.id).join(','));
-    for (const v of changed.slice(0, 5)) await this.readChat(v);
+    // more than 5 changed chats: the rest wait for the next look (none are forgotten)
+    const queue = [...this.backlog, ...changed].filter((v, i, a) => a.findIndex(x => x.id === v.id) === i);
+    this.backlog = queue.slice(5);
+    for (const v of queue.slice(0, 5)) await this.readChat(v);
+  }
+  /** stability: remember (at most every 30 s) that the chat list was readable now. */
+  touchAlive() {
+    const t = Date.now(); if (t - this.aliveAt < 30000) return; this.aliveAt = t;
+    try { fs.writeFileSync(this.aliveFile, JSON.stringify({ at: t }), { mode: 0o600 }); } catch {}
   }
   async openChat(id) {
     if (!this.page.url().includes('/conversations/' + encodeURIComponent(id)) && !this.page.url().includes('/conversations/' + id)) {

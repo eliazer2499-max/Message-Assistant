@@ -4,9 +4,16 @@
 import { all, get, run, now, log, audit } from './db.js';
 import { userById, userByPhone } from './users.js';
 import { splitText } from './channels/gmweb.js';
+import { cfg } from './config.js';
 const splitPartsCount = (t) => Math.max(1, splitText(t || '').length);
 
 let channel = null, timer = null, busy = false, onFail = null;
+// stability: a text that failed to send waits a little before the next try (10 s, 30 s, 2, 5, 10 min) instead of burning all its
+// tries in a few seconds; ordinary texts get 6 tries, sign-in codes and admin texts 3.
+const RETRY_WAIT_MS = [10000, 30000, 120000, 300000, 600000];
+const holdUntil = new Map();
+const maxTries = (kind) => (kind === 'admin' || kind === 'code' ? 3 : 6);
+const retryWait = (tries) => (cfg.testMode ? 20 : RETRY_WAIT_MS[Math.min(tries, RETRY_WAIT_MS.length) - 1]);
 export const PRIORITY = { code: 0, admin: 1, reply: 5, busy: 4, waiting: 6, welcome: 5, reminder: 5, notice: 6 };
 export function attachChannel(ch, { onFailed } = {}) { channel = ch; onFail = onFailed || null; }
 // 1.0.2: media = a picture/file on this server to attach (mediaUrl = its private link, sent instead if attaching fails)
@@ -30,7 +37,8 @@ export async function drain() {
     for (;;) {
       if (channel.status().state !== 'connected') return;
       if (await checkUnconfirmed()) continue;
-      const m = get("SELECT * FROM outbox WHERE status='queued' ORDER BY priority, id LIMIT 1");
+      const tnow = Date.now();
+      const m = all("SELECT * FROM outbox WHERE status='queued' ORDER BY priority, id LIMIT 50").find(r => (holdUntil.get(r.id) || 0) <= tnow);
       if (!m) return;
       run("UPDATE outbox SET status='sending', tries=tries+1 WHERE id=?", m.id);
       const t0 = Date.now();
@@ -65,11 +73,12 @@ export async function drain() {
 function fail(m, e) {
   const tries = get('SELECT tries FROM outbox WHERE id=?', m.id).tries;
   log('outbox', `send #${m.id} failed (${tries}):`, e.message);
-  if (tries >= 3) {
+  if (tries >= maxTries(m.kind)) {
+    holdUntil.delete(m.id);
     run("UPDATE outbox SET status='failed', error=? WHERE id=?", String(e.message).slice(0, 300), m.id);
     audit('system', 'outbox.failed', `#${m.id} (${m.kind}): ${e.message}`);
     if (m.kind !== 'admin' && m.kind !== 'code') onFail?.(m, e);
-  } else run("UPDATE outbox SET status='queued', error=? WHERE id=?", String(e.message).slice(0, 300), m.id);
+  } else { holdUntil.set(m.id, Date.now() + retryWait(tries)); run("UPDATE outbox SET status='queued', error=? WHERE id=?", String(e.message).slice(0, 300), m.id); }
 }
 /** One due 'unconfirmed' text: look at its chat. Returns true when it handled one. */
 async function checkUnconfirmed() {
