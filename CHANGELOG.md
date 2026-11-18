@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.1.6 — 2026-11-18
+- **Pictures and voice notes now go out every way the page allows.** On the real Messages page the file could silently never reach the compose box, so the picture simply never arrived. Attaching was rebuilt: the sender now tries, in order, the attach button's file picker (including its menu), the Ctrl+K / Ctrl+Shift+A shortcut's picker, the hidden file box, and pasting — then dropping — the file itself into the compose box, and it **checks the file's preview is showing before pressing Send**. If a way fails, the next is tried. And when nothing works, the failure now names each step that was tried, so the Activity log says exactly what the page did instead of a silent nothing. Proven in a real browser against pages that allow only one route each (picker only, paste only, file box only).
+
 ## 1.1.5 — 2026-11-18
 - **Pictures arrive as pictures, never as a link.** The YouTube preview thumbnail was texted as a bare link (…/thumbnail.jpg) when the Messages page would not take the file — the same fallback 1.1.4 removed for audio still existed for pictures. It is gone for everything: a file is sent as the file, or the send fails and is retried. Attaching also got more careful: the driver now checks the file is really staged (its preview shows in the compose box) before pressing Send, using the attach button's file chooser when the hidden file box stages nothing.
 - **Video → YouTube, song → YouTube Music.** That is now the standing rule for youtube_audio (search words and the assistant alike), unless the person says otherwise or pastes a link.

@@ -31,7 +31,7 @@ test('pictures through the real Messages driver: attached — and NEVER a link w
   st.mode = 'connected';
   const { GoogleMessagesWeb } = await import('../src/channels/gmweb.js');
   const seen = new Set();
-  const gm = new GoogleMessagesWeb({ isSeen: (id) => seen.has(id), markSeen: (id) => seen.add(id), needsBaseline: () => false, baselineDone: () => {}, attachWaitMs: 200 });
+  const gm = new GoogleMessagesWeb({ isSeen: (id) => seen.has(id), markSeen: (id) => seen.add(id), needsBaseline: () => false, baselineDone: () => {}, attachWaitMs: 200, chooserMs: 700 });
   await gm.start();
   try {
     await until(() => gm.status().state === 'connected', 40000, 'connected');
@@ -41,9 +41,16 @@ test('pictures through the real Messages driver: attached — and NEVER a link w
     const out = conv().msgs.filter(m => m.out);
     assert.ok(out.some(m => m.media === 'pic.png'), 'the picture was attached: ' + JSON.stringify(out.slice(-3)));
     assert.equal(out.at(-1).text, 'Here it is');
-    st.noAttach = true;
-    await assert.rejects(() => gm.send({ convId: '101', text: 'Second', media: img, mediaUrl: 'https://msg.example.com/m/tok/site.png' }), /could not be attached/);
+    // a page with NO attach route at all (no file box, no button, no paste): the send must fail, never link.
+    // A fresh driver, because the open chat does not re-render when the flag flips.
+    st.noAttach = true; st.attachMode = 'none';
+    const gm2 = new GoogleMessagesWeb({ isSeen: (id) => seen.has(id), markSeen: (id) => seen.add(id), needsBaseline: () => false, baselineDone: () => {}, attachWaitMs: 200, chooserMs: 700 });
+    await gm2.start();
+    try {
+      await until(() => gm2.status().state === 'connected', 40000, 'connected');
+      await assert.rejects(() => gm2.send({ convId: '101', text: 'Second', media: img, mediaUrl: 'https://msg.example.com/m/tok/site.png' }), /could not be attached/);
+    } finally { await gm2.stop(); }
     assert.ok(!conv().msgs.some(m => /example\.com/.test(m.text || '')), 'no link was texted instead of the picture');
     assert.equal(conv().msgs.filter(m => m.out).at(-1).text, 'Here it is', 'nothing new went out');
-  } finally { st.noAttach = false; await gm.stop(); }
+  } finally { st.noAttach = false; st.attachMode = 'input'; await gm.stop(); }
 });
