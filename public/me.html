@@ -62,23 +62,30 @@
           <p class="muted small" id="gHelp">Ask things like “what’s on my calendar tomorrow?” or “any new email from the school?”</p>
           <button class="primary" id="gConnect" type="button">Connect Google</button>
           <p class="muted small hidden" id="gNotReady">Google connect is not set up yet. The admin turns it on in Manage system → Settings → Connect accounts.</p>
-          <div id="ownKeys" class="hidden">
-            <p class="muted small" id="ownState"></p>
-            <details class="help"><summary>Use your own Google keys (free, about 5 minutes)</summary>
-              <ol class="steps">
-                <li>Open <b>console.cloud.google.com</b>, make a project, and enable the <b>Gmail</b>, <b>Google Calendar</b> and <b>Google Drive</b> APIs.</li>
-                <li>Set up the <b>OAuth consent screen</b> (External, your email as support/contact).</li>
-                <li><b>Credentials → Create credentials → OAuth client ID → Web application</b>. Under <b>Authorized redirect URIs</b> add exactly: <code id="ownRedirect">…</code></li>
-                <li>Paste the <b>Client ID</b> and <b>Client secret</b> here and press Save, then tap Connect Google.</li>
-              </ol>
-            </details>
-            <label>Your Client ID<input id="ownId" placeholder="1234-abc.apps.googleusercontent.com" autocomplete="off"></label>
-            <label>Your Client secret<input id="ownSecret" type="password" placeholder="paste the Client secret" autocomplete="off"></label>
-            <div class="row"><button id="ownSave" type="button">Save my keys</button><button class="ghost hidden" id="ownRemove" type="button">Remove my keys</button></div>
-          </div>
         </div>
-        <div class="card acc soon">
-          <div class="acchead"><span class="gmark other" aria-hidden="true">+</span><div><b>More accounts</b><div class="muted small">Other kinds of accounts can be added here later.</div></div></div>
+        <div class="card acc hidden" id="aiCard">
+          <div class="acchead"><span class="gmark other" aria-hidden="true">AI</span><div><b>Your AI keys</b><div class="muted small">The assistant's brain, running on your keys</div></div></div>
+          <p class="muted small">Add your own AI key (Gemini, Groq, OpenRouter…) and the assistant will answer <b>you</b> with your keys first; the system keys stay as a backup. Your keys are stored sealed, used only for you, and never shown.</p>
+          <div id="aiList"></div>
+          <label>Provider<select id="aiPreset"></select></label>
+          <p class="muted small" id="aiHelp"></p>
+          <label class="hidden" id="aiAcctWrap">Account ID<input id="aiAcct" autocomplete="off"></label>
+          <label class="hidden" id="aiBaseWrap">API address (base URL)<input id="aiBase" placeholder="https://…/v1" autocomplete="off"></label>
+          <label class="hidden" id="aiModelWrap">Model<input id="aiModel" autocomplete="off"></label>
+          <label>Name (optional)<input id="aiName" placeholder="e.g. My Gemini" autocomplete="off"></label>
+          <label>Key<input id="aiKey" type="password" placeholder="paste your API key" autocomplete="off"></label>
+          <div class="row"><button class="primary" id="aiAdd" type="button">Add my key</button></div>
+        </div>
+        <div class="card acc" id="vaultCard">
+          <div class="acchead"><span class="gmark other" aria-hidden="true">🔒</span><div><b>Secure vault</b><div class="muted small">Your logins &amp; tokens, for any account</div></div></div>
+          <p class="muted small">Save a login, an API token or any secret here — Cloudflare, a bank, anything. It is stored <b>sealed</b> on the server. The assistant can use it to sign in and do tasks for you, but it <b>never</b> shows it in a chat — not even to you. Ask things like “sign into my Cloudflare and check my domains”.</p>
+          <div id="vList"></div>
+          <label>What is it?<select id="vKind"><option value="login">Login (site + username + password)</option><option value="token">API token / key</option><option value="secret">Secret / keyword</option></select></label>
+          <label>Label<input id="vLabel" placeholder="e.g. Cloudflare, Chase bank" autocomplete="off"></label>
+          <label id="vSiteWrap">Site (optional)<input id="vSite" placeholder="e.g. dash.cloudflare.com" autocomplete="off"></label>
+          <label id="vUserWrap">Username / email (optional)<input id="vUser" autocomplete="off"></label>
+          <label>Password / token / secret<input id="vSecret" type="password" placeholder="stored sealed — never shown again" autocomplete="off"></label>
+          <div class="row"><button class="primary" id="vAdd" type="button">Save in my vault</button></div>
         </div>
       </div>
     </section>

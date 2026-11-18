@@ -33,7 +33,7 @@ function view(v) {
   for (const b of document.querySelectorAll('#meNav button')) b.classList.toggle('on', b.dataset.v === v);
   $('#v-chats').classList.toggle('hidden', v !== 'chats'); $('#v-accounts').classList.toggle('hidden', v !== 'accounts');
   document.body.dataset.view = v;
-  if (v === 'accounts') { history.replaceState(null, '', '#accounts'); api('GET', '/api/u/connections').then(accounts).catch(() => {}); }
+  if (v === 'accounts') { history.replaceState(null, '', '#accounts'); api('GET', '/api/u/connections').then(accounts).catch(() => {}); loadAiKeys(); loadVault(); }
   else { history.replaceState(null, '', location.pathname); const c = $('#chat'); c.scrollTop = c.scrollHeight; }
 }
 for (const b of document.querySelectorAll('#meNav button')) b.onclick = () => view(b.dataset.v);
@@ -45,21 +45,49 @@ function accounts(r) {
   const ready = r.google_ready === true;   // 1.1.1: only a clear "ready" shows the button (a missing/failed answer used to show Connect, which then dead-ended)
   $('#gConnect').classList.toggle('hidden', !ready); $('#gNotReady').classList.toggle('hidden', ready);
   $('#gConnect').textContent = list.length ? 'Connect another Google account' : 'Connect Google';
-  // 1.1.3: your own Google keys, or the system's — the admin chooses if own keys are allowed
-  const ownOk = r.own_allowed !== false, own = r.own_client || {};
-  $('#ownKeys').classList.toggle('hidden', !ownOk);
-  if (ownOk) {
-    $('#ownRedirect').textContent = r.redirect_uri || '';
-    $('#ownId').value = own.client_id || '';
-    $('#ownSecret').placeholder = own.has_secret ? '(saved — paste a new one to change)' : 'paste the Client secret';
-    $('#ownRemove').classList.toggle('hidden', !(own.client_id || own.has_secret));
-    $('#ownState').textContent = r.google_via === 'own' ? 'You connect with your own Google keys.' : r.google_via === 'system' ? 'You connect with the system Google keys.' + (own.ready ? ' (Your own keys are saved too; they are used first — remove them to use the system ones.)' : '') : own.client_id || own.has_secret ? 'Your keys are almost ready — both a Client ID and a secret are needed.' : 'No keys yet: the system keys are not set up, so add your own keys below to connect.';
-    if (!ready) $('#gNotReady').textContent = 'Almost there: add your own Google keys below (free, about 5 minutes), then Connect Google appears.';
-  }
+  $('#accGoogle').classList.toggle('hidden', r.google_enabled === false);   // 1.1.4: Google connect is an admin option
 }
-$('#ownSave').onclick = async () => { try { const r = await api('POST', '/api/u/connect/own-client', { client_id: $('#ownId').value, ...($('#ownSecret').value ? { client_secret: $('#ownSecret').value } : {}) }); $('#ownSecret').value = ''; msg($('#accMsg'), 'Your keys are saved. Now tap Connect Google.', true); accounts(await api('GET', '/api/u/connections')); } catch (er) { msg($('#accMsg'), er.message); } };
-$('#ownRemove').onclick = async () => { if (!confirm('Remove your own Google keys? Accounts you connected with them will be disconnected.')) return; try { await api('POST', '/api/u/connect/own-client/remove'); msg($('#accMsg'), 'Your keys were removed.', true); accounts(await api('GET', '/api/u/connections')); } catch (er) { msg($('#accMsg'), er.message); } };
 $('#gConnect').onclick = async () => { try { const r = await api('POST', '/api/u/connect/google'); location.href = r.url; } catch (er) { msg($('#accMsg'), er.message); } };
+// 1.1.4: your own AI keys (the brain) — the admin's switch decides if this card shows at all
+let aiPresets = [];
+async function loadAiKeys() {
+  let r; try { r = await api('GET', '/api/u/aikeys'); } catch { return; }
+  $('#aiCard').classList.toggle('hidden', !r.allowed);
+  if (!r.allowed) return;
+  aiPresets = r.presets || [];
+  const sel = $('#aiPreset');
+  if (!sel.options.length) { sel.innerHTML = aiPresets.map(p => `<option value="${p.id}">${escapeText(p.label)}</option>`).join(''); sel.onchange = aiPresetUi; }
+  aiPresetUi();
+  $('#aiList').innerHTML = (r.keys || []).map(k => `<div class="accrow"><span class="dot ${k.status === 'ok' ? 'ok' : 'bad'}"></span><div class="grow"><b>${escapeText(k.name)}</b><div class="muted small">${escapeText(k.kind_label)}${k.effective_model ? ' · ' + escapeText(k.effective_model) : ''} · ${escapeText(k.masked || 'saved')}</div></div><button class="ghost small" data-aikrm="${k.id}" type="button">Remove</button></div>`).join('') || '<p class="muted small">No keys of your own yet — you are using the system keys.</p>';
+  for (const b of document.querySelectorAll('[data-aikrm]')) b.onclick = async () => { if (!confirm('Remove this key?')) return; try { await api('POST', `/api/u/aikeys/${b.dataset.aikrm}/remove`); loadAiKeys(); } catch (er) { msg($('#accMsg'), er.message); } };
+}
+function aiPresetUi() {
+  const p = aiPresets.find(x => x.id === $('#aiPreset').value) || {};
+  $('#aiHelp').textContent = p.help || '';
+  $('#aiAcctWrap').classList.toggle('hidden', p.id !== 'cloudflare');
+  $('#aiBaseWrap').classList.toggle('hidden', p.id !== 'custom');
+  $('#aiModelWrap').classList.toggle('hidden', !(p.id === 'custom' || p.id === 'cloudflare'));
+  $('#aiKey').placeholder = p.id === 'cloudflare' ? 'paste the API token' : 'paste your API key';
+}
+$('#aiAdd').onclick = async () => {
+  try {
+    await api('POST', '/api/u/aikeys', { preset: $('#aiPreset').value, key: $('#aiKey').value, name: $('#aiName').value, account_id: $('#aiAcct').value, base_url: $('#aiBase').value, model: $('#aiModel').value });
+    $('#aiKey').value = ''; $('#aiName').value = ''; msg($('#accMsg'), 'Your key is saved. From now on the assistant answers you with your keys first.', true); loadAiKeys();
+  } catch (er) { msg($('#accMsg'), er.message); }
+};
+// 1.1.4: the secure vault — logins & tokens for any account; values are never shown again
+async function loadVault() {
+  let r; try { r = await api('GET', '/api/u/vault'); } catch { return; }
+  $('#vList').innerHTML = (r.entries || []).map(e => `<div class="accrow"><span class="dot ok"></span><div class="grow"><b>${escapeText(e.label)}</b><div class="muted small">${e.kind === 'login' ? 'Login' : e.kind === 'token' ? 'API token' : 'Secret'}${e.site ? ' · ' + escapeText(e.site) : ''}${e.username ? ' · ' + escapeText(e.username) : ''} · saved, sealed</div></div><button class="ghost small" data-vrm="${e.id}" type="button">Remove</button></div>`).join('') || '<p class="muted small">Nothing in your vault yet.</p>';
+  for (const b of document.querySelectorAll('[data-vrm]')) b.onclick = async () => { if (!confirm('Remove this from your vault?')) return; try { await api('POST', `/api/u/vault/${b.dataset.vrm}/remove`); loadVault(); } catch (er) { msg($('#accMsg'), er.message); } };
+}
+$('#vKind').onchange = () => { const login = $('#vKind').value === 'login'; $('#vUserWrap').classList.toggle('hidden', !login); $('#vSiteWrap').classList.toggle('hidden', false); };
+$('#vAdd').onclick = async () => {
+  try {
+    await api('POST', '/api/u/vault', { kind: $('#vKind').value, label: $('#vLabel').value, site: $('#vSite').value, username: $('#vUser').value, secret: $('#vSecret').value });
+    $('#vSecret').value = ''; $('#vLabel').value = ''; msg($('#accMsg'), 'Saved in your vault, sealed. The assistant can use it, but will never show it.', true); loadVault();
+  } catch (er) { msg($('#accMsg'), er.message); }
+};
 $('#manage').onclick = async () => { try { const r = await api('POST', '/api/u/manage'); location.href = r.go || '/'; } catch (er) { alert(er.message); } };
 $('#earlier').onclick = async () => {
   const box = $('#chat'), h = box.scrollHeight;

@@ -12,6 +12,7 @@ fs.writeFileSync(fake, `#!/usr/bin/env node
 const { execFileSync } = require('child_process');
 if (process.argv[2] === '--version') { console.log('2026.01.01'); process.exit(0); }
 if (process.argv.includes('--get-title')) { console.log('Fake Song Title'); process.exit(0); }
+if (process.argv.includes('--dump-single-json')) { console.log(JSON.stringify({ id: 'jNQXAC9IVRw', title: 'Fake Song Title', uploader: 'Fake Singer', upload_date: '20210305', duration: 130, thumbnail: '', webpage_url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw' })); process.exit(0); }
 const i = process.argv.indexOf('-o'); const out = process.argv[i + 1].replace('%(ext)s', 'mp3');
 execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=130', '-codec:a', 'libmp3lame', '-q:a', '4', out]);
 console.log('fake download ok');
@@ -53,37 +54,25 @@ const media = await import('../src/tools/media.js');
 const u = users.arrive({ phone: '+16465550199', name: 'Moshe', text: 'hi' }).user;
 test.after(() => { fakeG.close(); });
 
-test('connect with your OWN Google keys (admin toggle on by default); the system keys still work too', async () => {
-  assert.equal(INTEG.ownAllowed(), true, 'own keys allowed by default');
-  assert.equal(INTEG.effectiveClient(u.id).ready, false, 'nothing set up yet');
-  assert.throws(() => INTEG.startGoogle(u.id), /No Google keys yet/);
-  INTEG.setOwnClient(u.id, { client_id: 'own-1.apps.googleusercontent.com', client_secret: 'own-secret-12345' });
-  const eff = INTEG.effectiveClient(u.id);
-  assert.equal(eff.via, 'own'); assert.equal(eff.ready, true);
+test('Google connect: each person connects their OWN Google account with the system client; the admin option turns it off', async () => {
+  assert.equal(INTEG.googleEnabled(), true, 'Google connect on by default');
+  assert.equal(INTEG.googleSetup().ready, false, 'no system client yet');
+  assert.throws(() => INTEG.startGoogle(u.id), /not set up yet/);
+  INTEG.setGoogleClient({ client_id: 'sys-1.apps.googleusercontent.com', client_secret: 'system-secret-123' });
   const { url } = INTEG.startGoogle(u.id);
-  assert.match(url, /client_id=own-1\.apps\.googleusercontent\.com/, 'the connect starts with HIS keys');
+  assert.match(url, /client_id=sys-1\.apps\.googleusercontent\.com/, 'the connect starts with the system client');
   const st = db.get('SELECT * FROM oauth_states ORDER BY created DESC LIMIT 1');
-  assert.equal(st.via, 'own');
   const fin = await INTEG.finishGoogle({ code: 'any', state: st.state });
   assert.equal(fin.account, 'moshe@example.com');
-  assert.deepEqual(G.tokenClient, ['own-1.apps.googleusercontent.com'], 'the code was exchanged with his keys');
-  const conn = db.get("SELECT * FROM connections WHERE user_id=? AND provider='google'", u.id);
-  assert.equal(conn.client, 'own');
-  const mail = await INTEG.gmailRecent(u.id);           // access token is already "expired" (expires_in 1) → refresh…
+  assert.deepEqual(G.tokenClient, ['sys-1.apps.googleusercontent.com'], 'the code was exchanged with the system client');
+  const mail = await INTEG.gmailRecent(u.id);           // access token is already "expired" (expires_in 1) → refresh with the system client
   assert.equal(mail.length, 1);
-  assert.deepEqual(G.refreshClient, ['own-1.apps.googleusercontent.com'], '…refreshed with his keys too');
-  // removing his keys takes his connections with them
-  INTEG.removeOwnClient(u.id);
-  assert.equal(INTEG.list(u.id).length, 0);
-  assert.equal(INTEG.effectiveClient(u.id).ready, false);
-  // the toggle off: his keys are ignored, only the system's count
-  INTEG.setOwnClient(u.id, { client_id: 'own-1.apps.googleusercontent.com', client_secret: 'own-secret-12345' });
-  db.run("INSERT INTO settings(k, v) VALUES('allow_own_google_client', '0') ON CONFLICT(k) DO UPDATE SET v='0'");
-  assert.equal(INTEG.effectiveClient(u.id).ready, false, 'toggle off + no system keys = not ready');
-  INTEG.setGoogleClient({ client_id: 'sys-1.apps.googleusercontent.com', client_secret: 'system-secret-123' });
-  const eff2 = INTEG.effectiveClient(u.id);
-  assert.equal(eff2.via, 'system'); assert.match(INTEG.startGoogle(u.id).url, /client_id=sys-1/);
-  db.run("DELETE FROM settings WHERE k='allow_own_google_client'");
+  assert.deepEqual(G.refreshClient, ['sys-1.apps.googleusercontent.com']);
+  // the admin option off: connect refuses, the page hides the card (google_enabled=false)
+  db.setSetting('google_connect_enabled', '0');
+  assert.equal(INTEG.googleEnabled(), false);
+  assert.throws(() => INTEG.startGoogle(u.id), /turned off/);
+  db.setSetting('google_connect_enabled', '1');
 });
 
 test('long audio arrives IN FULL as voice-note parts, in order (YouTube and YouTube Music)', async (t) => {
@@ -95,17 +84,23 @@ test('long audio arrives IN FULL as voice-note parts, in order (YouTube and YouT
   execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=150', '-codec:a', 'libmp3lame', '-q:a', '4', src]);
   const parts = await media._test.splitIntoParts(src, 'mp3', dir, 60);
   assert.equal(parts.files.length, 3);
-  // through the tool (fake download is 130 s, parts are 60 s here): 3 parts attached, named in order
+  // through the tool (fake download is 130 s, parts are 60 s here): preview first (1.1.4), then 3 parts attached, named in order
   const ctx = { userId: u.id, files: [] };
-  const r = await tools.execTool('youtube_audio', { url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }, ctx);
-  assert.equal(r.ok, true, JSON.stringify(r)); assert.equal(r.parts, 3); assert.equal(ctx.files.length, 3);
+  const pv = await tools.execTool('youtube_audio', { url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }, ctx);
+  assert.equal(pv.preview, true, JSON.stringify(pv)); assert.ok(ctx.files.every(f => /\.jpg$/.test(f.media.file)), 'only the thumbnail before the yes');
+  const r = await tools.execTool('youtube_audio', { confirm: true }, ctx);
+  assert.equal(r.ok, true, JSON.stringify(r)); assert.equal(r.parts, 3);
+  const auds = ctx.files.filter(f => /\.mp3$/.test(f.media.file));
+  assert.equal(auds.length, 3);
   const mname = (f) => db.get('SELECT name FROM media WHERE token=?', f.media.token).name;
-  assert.match(mname(ctx.files[0]), /part 1 of 3/); assert.match(mname(ctx.files[2]), /part 3 of 3/);
-  assert.ok(ctx.files.every(f => fs.existsSync(f.media.file)));
-  // YouTube Music: search words + source music → title from Music, same parts treatment
+  assert.match(mname(auds[0]), /part 1 of 3/); assert.match(mname(auds[2]), /part 3 of 3/);
+  assert.ok(auds.every(f => fs.existsSync(f.media.file)));
+  // YouTube Music: search words + source music → preview from Music, then the same parts treatment after the yes
   const ctx2 = { userId: u.id, files: [] };
-  const r2 = await tools.execTool('youtube_audio', { query: 'some song', source: 'music' }, ctx2);
-  assert.equal(r2.ok, true, JSON.stringify(r2));
-  assert.equal(r2.source, 'YouTube Music'); assert.equal(r2.title, 'Fake Song Title'); assert.equal(r2.parts, 3);
+  const pv2 = await tools.execTool('youtube_audio', { query: 'some song', source: 'music' }, ctx2);
+  assert.equal(pv2.preview, true, JSON.stringify(pv2));
+  assert.equal(pv2.source, 'YouTube Music'); assert.equal(pv2.title, 'Fake Song Title');
+  const r2 = await tools.execTool('youtube_audio', { confirm: true }, ctx2);
+  assert.equal(r2.ok, true, JSON.stringify(r2)); assert.equal(r2.parts, 3);
   assert.equal(media.isYoutubeUrl('https://music.youtube.com/watch?v=abc'), true);
 });

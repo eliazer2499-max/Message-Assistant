@@ -92,6 +92,8 @@
       <div class="card">
         <h2>AI keys <button class="link small" id="addKeyBtn">+ Add key</button></h2>
         <p class="muted small">Tried top to bottom. A key that hits its limit rests and comes back by itself; the next key answers meanwhile. Add as many free keys as you like.</p>
+        <label class="check"><input type="checkbox" id="ownAiKeys"> People may use <b>their own</b> AI keys</label>
+        <p class="muted small">When this is on, each person can add their own AI keys on their page (Connected accounts → Your AI keys). Their chats then run on <b>their</b> keys first, with your system keys above as the backup. Turn it off and everyone uses only the system keys.</p>
         <div id="keys"></div>
       </div>
       <div class="card hidden" id="keyForm">
@@ -138,6 +140,7 @@
         <label>AI steps per message<input data-s="max_steps" inputmode="numeric"></label>
         <label>Tool rounds per message (searches, browser…; then it answers)<input data-s="tool_rounds" inputmode="numeric"></label>
         <label class="check"><input type="checkbox" data-s="fast_chat"> Quick answers: plain chat (“hi”, “thanks”) uses one AI call, no tools</label>
+        <label class="check"><input type="checkbox" data-s="reactions"> Reactions: react to a person's message with the emoji that fits (🔍 for a search, 🎵 for a song, 👍 for a task)</label>
         <label>"Access ended" text (sent once after a person’s end date; {name} = assistant name)<textarea data-s="expired_text" rows="2"></textarea></label>
         <label>Gemini model (blank = default)<input data-s="model"></label>
         <label class="check"><input type="checkbox" data-s="browser_enabled"> Web browser for the assistant</label>
@@ -169,8 +172,8 @@
         <label>Client secret<input id="gSecret" type="password" placeholder="(saved — paste a new one to change)" autocomplete="off"></label>
         <div class="row"><button class="primary" id="gSave">Save</button></div>
         <p id="gMsg" class="msg"></p>
-        <label class="check"><input type="checkbox" id="gOwn"> People may connect with <b>their own</b> Google keys</label>
-        <p class="muted small">When this is on, each person can paste their own Client ID and secret (from their own free Google Cloud project) on their page and connect with those, instead of — or before — your system keys above. Their keys and accounts stay theirs. Turn it off to allow only the system keys.</p>
+        <label class="check"><input type="checkbox" id="gEnabled"> Google connect is available to people</label>
+        <p class="muted small">Each person connects <b>their own</b> Google account on their page (with the system client above). Turn this off and the Google card leaves their page entirely.</p>
       </div>
       <div class="card" id="speedCard">
         <h2>Speed</h2>

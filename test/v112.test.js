@@ -10,6 +10,7 @@ const fake = path.join(fakeDir, 'yt-dlp');
 fs.writeFileSync(fake, `#!/usr/bin/env node
 const fs = require('fs'); const { execFileSync } = require('child_process');
 if (process.argv[2] === '--version') { console.log('2026.01.01'); process.exit(0); }
+if (process.argv.includes('--dump-single-json')) { console.log(JSON.stringify({ id: 'jNQXAC9IVRw', title: 'Me at the zoo', uploader: 'jawed', upload_date: '20050424', duration: 19, thumbnail: '', webpage_url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw' })); process.exit(0); }
 const i = process.argv.indexOf('-o'); const out = process.argv[i + 1].replace('%(ext)s', 'mp3');
 execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', out]);
 console.log('fake yt-dlp downloaded to ' + out);
@@ -22,6 +23,8 @@ const db = await import('../src/db.js');
 db.openDb();
 const tools = await import('../src/tools/index.js');
 const media = await import('../src/tools/media.js');
+const users = await import('../src/users.js');
+const u112 = users.arrive({ phone: '+16465550198', name: 'Yaakov', text: 'hi' }).user;
 
 test('YouTube search results are parsed (id, title, length)', () => {
   const html = 'x"videoRenderer":{"videoId":"jNQXAC9IVRw","thumbnail":{},"title":{"runs":[{"text":"Me at the zoo"}],"navigationEndpoint":{}},"lengthText":{"accessibility":{},"simpleText":"0:19"} y "videoRenderer":{"videoId":"dQw4w9WgXcQ","title":{"runs":[{"text":"Rick Astley - Never Gonna Give You Up (Official Video)"}]},"lengthText":{"simpleText":"3:33"}';
@@ -35,21 +38,27 @@ test('YouTube search results are parsed (id, title, length)', () => {
   assert.equal(media.isYoutubeUrl('https://example.com/clip.mp4'), false);
 });
 
-test('youtube_audio: the audio file itself is attached (never a link)', async (t) => {
+test('youtube_audio: preview first (1.1.4), then the audio file itself is attached (never a link)', async (t) => {
   if (!(await media.ffmpegOk())) { t.skip('no ffmpeg here'); return; }
   assert.equal(await media.ytdlpPath(), fake);
-  const ctx = { userId: 999, files: [] };
-  const r = await tools.execTool('youtube_audio', { url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }, ctx);
+  const ctx = { userId: u112.id, files: [] };
+  const p = await tools.execTool('youtube_audio', { url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }, ctx);
+  assert.equal(p.preview, true, JSON.stringify(p));           // 1.1.4: first a preview, nothing downloaded
+  assert.equal(p.title, 'Me at the zoo');
+  assert.ok(ctx.files.every(f => /\.jpg$/.test(f.media.file)), 'only the thumbnail picture before the yes — no audio');
+  const r = await tools.execTool('youtube_audio', { confirm: true }, ctx);
   assert.equal(r.ok, true, JSON.stringify(r));
-  assert.equal(ctx.files.length, 1, 'one attachment queued for the reply');
-  assert.ok(fs.existsSync(ctx.files[0].media.file), 'the audio file exists on the server');
-  assert.match(ctx.files[0].media.file, /\.mp3$/);
+  const audio = ctx.files.filter(f => /\.mp3$/.test(f.media.file));
+  assert.equal(audio.length, 1, 'one audio attachment queued for the reply');
+  assert.ok(fs.existsSync(audio[0].media.file), 'the audio file exists on the server');
   assert.ok(r.audio_duration_seconds >= 1);
   assert.doesNotMatch(JSON.stringify(r), /youtube\.com\/watch/, 'no YouTube link in the result');
-  // extract_audio with a YouTube link takes the same road
-  const ctx2 = { userId: 999, files: [] };
-  const r2 = await tools.execTool('extract_audio', { url: 'https://youtu.be/jNQXAC9IVRw' }, ctx2);
+  // extract_audio with a YouTube link takes the same road (preview, then confirm)
+  const ctx2 = { userId: u112.id, files: [] };
+  const p2 = await tools.execTool('extract_audio', { url: 'https://youtu.be/jNQXAC9IVRw' }, ctx2);
+  assert.equal(p2.preview, true, JSON.stringify(p2));
+  const r2 = await tools.execTool('youtube_audio', { confirm: true }, ctx2);
   assert.equal(r2.ok, true, JSON.stringify(r2));
-  assert.equal(ctx2.files.length, 1);
+  assert.equal(ctx2.files.filter(f => /\.mp3$/.test(f.media.file)).length, 1);
   assert.ok(tools.TOOLS.some(x => x.name === 'youtube_audio'), 'the tool is offered to the AI');
 });
