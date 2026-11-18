@@ -24,7 +24,7 @@ async function api(method, path, body, ms = 0) {
   try { r = await fetch(path, { method, signal: ac ? ac.signal : undefined, headers: { 'Content-Type': 'application/json', ...(CSRF ? { 'X-CSRF-Token': CSRF } : {}) }, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' }); }
   catch (e) { if (e.name === 'AbortError') { const t = new Error('No answer in ' + Math.round(ms / 1000) + ' seconds'); t.timeout = true; throw t; } throw e; }
   finally { clearTimeout(tm); }
-  if (r.status === 401 && !path.startsWith('/api/login')) { showLogin(); throw new Error('Please sign in'); }
+  if (r.status === 401 && !/^\/api\/(u\/)?login/.test(path)) { showLogin(); throw new Error('Please sign in'); }
   const ct = r.headers.get('content-type') || '';
   const data = ct.includes('json') ? await r.json() : null;
   if (!r.ok) throw new Error((data && data.error) || ('Error ' + r.status));
@@ -34,13 +34,7 @@ async function api(method, path, body, ms = 0) {
 const GET = (p) => api('GET', p), POST = (p, b = {}) => api('POST', p, b);
 
 // ---------------- sign-in ----------------
-function showLogin() { $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); stopTimers(); checkPortal(); }
-// 1.0.5: someone who opens the address to chat (not the admin) gets a link to their own web chat, when it is on
-let portalChecked = false;
-function checkPortal() {
-  if (portalChecked) return; portalChecked = true;
-  fetch('/api/u/me', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).then(me => { if (me && me.enabled !== false) $('#toPortal').classList.remove('hidden'); }).catch(() => {});
-}
+function showLogin() { $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); stopTimers(); }
 function showApp() { $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); go(VIEW); overviewTimer = setInterval(refreshOverview, 10000); }
 function stopTimers() { clearInterval(overviewTimer); clearInterval(screenTimer); overviewTimer = screenTimer = null; }
 $$('#loginTabs button').forEach(b => b.onclick = () => {
@@ -49,11 +43,12 @@ $$('#loginTabs button').forEach(b => b.onclick = () => {
 });
 $('#fPhone').onsubmit = async (e) => {
   e.preventDefault();
-  try { const r = await POST('/api/login/code', { phone: $('#lPhone').value }); msg($('#loginMsg'), r.hint || r.message, !r.hint); $('#fPhone').classList.add('hidden'); $('#fCode').classList.remove('hidden'); $('#lCode').focus(); }
+  try { const r = await POST('/api/u/login/code', { phone: $('#lPhone').value }); msg($('#loginMsg'), r.hint || r.message, !r.hint); $('#fPhone').classList.add('hidden'); $('#fCode').classList.remove('hidden'); $('#lCode').focus(); }
   catch (er) { msg($('#loginMsg'), er.message); }
 };
 $('#codeBack').onclick = () => { $('#fCode').classList.add('hidden'); $('#fPhone').classList.remove('hidden'); };
-$('#fCode').onsubmit = async (e) => { e.preventDefault(); try { await POST('/api/login/verify', { phone: $('#lPhone').value, code: $('#lCode').value }); $('#lCode').value = ''; showApp(); } catch (er) { msg($('#loginMsg'), er.message); } };
+// 1.1.0: a phone number (anybody, the admin too) signs in to ITS OWN chat page; an admin number also gets "Manage system" there
+$('#fCode').onsubmit = async (e) => { e.preventDefault(); try { const r = await POST('/api/u/login/verify', { phone: $('#lPhone').value, code: $('#lCode').value }); $('#lCode').value = ''; location.href = r.go || '/me'; } catch (er) { msg($('#loginMsg'), er.message); } };
 $('#fPass').onsubmit = async (e) => { e.preventDefault(); try { await POST('/api/login/password', { username: $('#lUser').value, password: $('#lPass').value }); $('#lPass').value = ''; showApp(); } catch (er) { msg($('#loginMsg'), er.message); } };
 $('#logout').onclick = async () => { await POST('/api/logout').catch(() => {}); CSRF = ''; showLogin(); };
 
@@ -128,7 +123,7 @@ async function openUser(id) {
     <p id="uAccMsg" class="msg"></p>
     <h2>Notes (${d.notes.length})</h2>${d.notes.map(n => `<div class="item"><div class="top"><span>${esc(n.fact)}</span><button class="link small" data-note="${n.id}">Delete</button></div></div>`).join('') || '<p class="muted small">None.</p>'}
     <h2>Reminders</h2>${d.reminders.map(r => `<div class="sub">${when(r.due)} — ${esc(r.text)}${r.every_minutes ? ' (every ' + r.every_minutes + ' min)' : ''}</div>`).join('') || '<p class="muted small">None.</p>'}
-    <h2>Recent messages</h2>${d.messages.map(m => `<div class="bubble ${m.role}">${esc(m.text)}</div>`).join('') || '<p class="muted small">None.</p>'}`;
+    <p class="muted small">🔒 Chats are private: you can't read this person's texts here.</p>`;
   $('#sheet').classList.remove('hidden');
   $('#uSave').onclick = async () => { await POST('/api/users/' + id, { daily_limit: $('#uLimit').value, paused: $('#uPaused').checked }); $('#sheet').classList.add('hidden'); loadPeople(); };
   $$('[data-note]').forEach(b => b.onclick = async () => { await POST(`/api/users/${id}/notes/${b.dataset.note}/delete`); openUser(id); });
@@ -140,7 +135,6 @@ async function openUser(id) {
 }
 $('#sheetClose').onclick = () => $('#sheet').classList.add('hidden');
 // 1.0.8: the admin's own chats and connected accounts (his web page)
-$('#myChats').onclick = async () => { try { const r = await POST('/api/my-chats'); location.href = r.go || '/me'; } catch (er) { alert(er.message); } };
 
 // 1.0.6: which browser runs, in plain words ("Browser: full (visible)" / "Browser: basic")
 function browserWords(b) { return b && b.label ? 'Browser: ' + b.label : ''; }
@@ -412,7 +406,7 @@ async function loadSettings() {
   checkUpdates(false);   // 1.0.3: first and on its own (before, a slow or failed part above it left "Checking…" forever)
   try {
     const d = await GET('/api/settings');
-    $$('[data-s]', $('#setForm')).forEach(i => { const v = d.settings[i.dataset.s] ?? ''; if (i.type === 'checkbox') i.checked = v === '1'; else i.value = v; });
+    $$('[data-s]', $('#setForm')).forEach(i => { const v = d.settings[i.dataset.s] ?? ''; if (i.type === 'checkbox') i.checked = v === '1'; else { i.value = v; if (i.tagName === 'SELECT' && !i.value) i.selectedIndex = 0; } });
     $('#adminPhones').value = d.admin_phones.join(', '); if (d.portal_url) $('#portalUrl').textContent = d.portal_url; $('#pwUser').value = d.admin_username || 'admin';
   } catch (er) { msg($('#setMsg'), er.message); }
   try {

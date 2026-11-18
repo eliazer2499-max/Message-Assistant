@@ -16,8 +16,10 @@ test('sign-in pages and dashboard carry the 1.0.5 layout: brand panel, one sign-
   const admin = await (await get('/')).text();
   assert.match(admin, /id="login" class="screen auth hidden"/);
   assert.match(admin, /class="authside"[\s\S]*class="card narrow authcard"/);
-  assert.match(admin, /Admin sign-in/);
-  assert.match(admin, /id="toPortal" class="authalt hidden"[^]*href="\/me"/);
+  // 1.1.0: two doors on one card: "My phone number" (a code by text, then the person's own chat) and "Admin" (password, dashboard)
+  assert.match(admin, /<p class="authtitle">Sign in<\/p>/);
+  assert.match(admin, /id="loginTabs"><button data-t="phone" class="on">My phone number<\/button><button data-t="password">Admin<\/button>/);
+  assert.doesNotMatch(admin, /id="myChats"/);
   const nav = admin.slice(admin.indexOf('<nav id="nav">'), admin.indexOf('</nav>'));
   for (const [v, label] of [['home', 'Home'], ['people', 'People'], ['connect', 'Connect'], ['sites', 'Sites'], ['keys', 'AI keys'], ['settings', 'Settings']]) {
     assert.match(nav, new RegExp(`<button data-v="${v}"[^>]*><svg class="ic"[^]*?<span>${label}</span>`), v);
@@ -31,7 +33,7 @@ test('sign-in pages and dashboard carry the 1.0.5 layout: brand panel, one sign-
   assert.match(css, /@media \(min-width:900px\)/);
   assert.match(css, /grid-template-columns:240px minmax\(0,1fr\)/);
   const js = await (await get('/app.js')).text();
-  assert.match(js, /function checkPortal\(\)/);
+  assert.doesNotMatch(js, /function checkPortal\(\)/);     // 1.1.0: the phone number signs in on this page itself
 });
 
 test('phone (360 / 430 px) and desktop (1440 px): no sideways scrolling, big tap targets, desktop navigation on the left', { skip: canRun ? false : 'no Playwright/Chromium here', timeout: 180000 }, async () => {
@@ -56,7 +58,6 @@ test('phone (360 / 430 px) and desktop (1440 px): no sideways scrolling, big tap
       assert.deepEqual(await overflow(p), { doc: 0, els: [] }, `${width} /me`);
       assert.deepEqual(await small(p), [], `${width} /me tap targets`);
       await p.goto(base + '/'); await p.waitForSelector('#login:not(.hidden)');
-      await p.waitForSelector('#toPortal:not(.hidden)', { timeout: 5000 });
       assert.deepEqual(await overflow(p), { doc: 0, els: [] }, `${width} /`);
       assert.deepEqual(await small(p), [], `${width} / tap targets`);
       const card = await p.locator('.authcard').boundingBox(), side = await p.locator('.authside').boundingBox();

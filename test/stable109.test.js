@@ -20,16 +20,20 @@ test('readAlive: a missing or broken file is 0', () => {
 });
 test('self-heal: reload first, then restart the browser; a human-only state resets it', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'heal-'));
-  const g = new GoogleMessagesWeb({ dataDir: dir, reloadAfterMs: 0, reloadEveryMs: 0, restartAfterMs: 50, restartEveryMs: 100000 });
+  const g = new GoogleMessagesWeb({ dataDir: dir });          // defaults: reload after 90 s, restart after 6 min (at most every 15 min)
   let loads = 0, restarts = 0;
   g.page = { isClosed: () => false, goto: async () => { loads++; } };
   g.closeBrowser = async () => { restarts++; }; g.ensureBrowser = async () => {};
-  assert.equal(await g.selfHeal('connected'), false);
-  assert.equal(await g.selfHeal('phone_offline'), false);            // just went down: nothing yet (reloadAfter 0 needs > 0 ms)
-  await new Promise(r => setTimeout(r, 10));
-  assert.equal(await g.selfHeal('phone_offline'), true); assert.equal(loads, 1);
-  await new Promise(r => setTimeout(r, 60));
-  assert.equal(await g.selfHeal('phone_offline'), true); assert.equal(restarts, 1);
-  assert.equal(await g.selfHeal('phone_offline'), true); assert.equal(restarts, 1, 'not restarted again within 15 min');
-  assert.equal(await g.selfHeal('signed_out'), false); assert.equal(g.badSince, 0);
+  const realNow = Date.now; let t = realNow.call(Date);
+  Date.now = () => t;
+  try {
+    assert.equal(await g.selfHeal('connected'), false);
+    assert.equal(await g.selfHeal('phone_offline'), false);   // just went down
+    t += 60000; assert.equal(await g.selfHeal('phone_offline'), false); assert.equal(loads, 0, 'not yet (60 s)');
+    t += 40000; assert.equal(await g.selfHeal('phone_offline'), true); assert.equal(loads, 1, 'reloaded after 90 s');
+    t += 30000; assert.equal(await g.selfHeal('phone_offline'), false); assert.equal(loads, 1, 'not again within 2 min');
+    t += 240000; assert.equal(await g.selfHeal('phone_offline'), true); assert.equal(restarts, 1, 'browser restarted after 6 min');
+    t += 130000; assert.equal(await g.selfHeal('phone_offline'), true); assert.equal(restarts, 1, 'not restarted again within 15 min'); assert.equal(loads, 2);
+    assert.equal(await g.selfHeal('signed_out'), false); assert.equal(g.badSince, 0);
+  } finally { Date.now = realNow; }
 });

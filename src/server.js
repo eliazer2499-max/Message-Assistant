@@ -29,7 +29,7 @@ const PUBLIC = path.join(APP_DIR, 'public');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 const EDITABLE = ['assistant_name', 'timezone', 'waiting_text', 'welcome_text', 'busy_text', 'daily_limit', 'max_steps', 'job_minutes', 'history_messages', 'max_parallel',
   'browser_enabled', 'browser_job_seconds', 'browser_parallel', 'alert_webhook', 'model', 'update_notify', 'portal_enabled',
-  'expired_text', 'tool_rounds', 'fast_chat', 'google_client_id'];     // 1.0.8
+  'expired_text', 'tool_rounds', 'fast_chat', 'google_client_id', 'connection_texts'];     // 1.0.8
 
 function send(res, status, body, headers = {}) {
   const h = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
@@ -80,16 +80,17 @@ on('GET', /^\/api\/overview$/, async () => ({
   today: get('SELECT COALESCE(SUM(messages),0) AS messages, COALESCE(SUM(replies),0) AS replies, COALESCE(SUM(model_calls),0) AS model_calls FROM usage WHERE day=?', users.today()),
 }));
 on('POST', /^\/api\/alerts\/clear$/, async (req, { b }) => { clearAlerts(b.id || null); return { ok: true }; });
-on('GET', /^\/api\/activity$/, async () => ({ items: all('SELECT id, ts, actor, action, detail FROM audit ORDER BY id DESC LIMIT 200'), outbox: outboxRecent(30) }));
+on('GET', /^\/api\/activity$/, async () => ({ items: all('SELECT id, ts, actor, action, detail FROM audit ORDER BY id DESC LIMIT 200'), outbox: outboxRecent(30).map(({ text, ...o }) => o) }));     // 1.1.0: what was sent to people stays private
 
 // ---------- people ----------
-on('GET', /^\/api\/users$/, async (req, { url }) => ({ users: users.listUsers(url.searchParams.get('status') || null) }));
+// 1.1.0: the first text of a person is shown to the admin only while the person waits for approval (to decide); after that it is private
+const hideFirst = (u) => (u && u.status !== 'pending' ? { ...u, first_text: '' } : u);
+on('GET', /^\/api\/users$/, async (req, { url }) => ({ users: users.listUsers(url.searchParams.get('status') || null).map(hideFirst) }));
 on('GET', /^\/api\/users\/(\d+)$/, async (req, { m }) => {
   const u = users.userById(m[1]); if (!u) throw Object.assign(new Error('Not found'), { status: 404 });
-  return { user: users.publicUser(u), today: users.usageOf(u.id), total: users.usageTotals(u.id), limit: users.dailyLimit(u),
+  return { user: hideFirst(users.publicUser(u)), today: users.usageOf(u.id), total: users.usageTotals(u.id), limit: users.dailyLimit(u),
     notes: all('SELECT id, fact, ts FROM memory WHERE user_id=? ORDER BY id DESC', u.id),
-    reminders: all('SELECT id, text, due, every_minutes FROM reminders WHERE user_id=? AND active=1 ORDER BY due', u.id),
-    messages: all('SELECT id, role, text, ts FROM messages WHERE user_id=? ORDER BY id DESC LIMIT 40', u.id).reverse() };
+    reminders: all('SELECT id, text, due, every_minutes FROM reminders WHERE user_id=? AND active=1 ORDER BY due', u.id) };     // 1.1.0: a person's chat is private: the admin does not read it here
 });
 on('POST', /^\/api\/users\/(\d+)\/approve$/, async (req, { m }) => ({ user: users.publicUser(approveAndWelcome(Number(m[1]))) }));
 on('POST', /^\/api\/users\/(\d+)\/block$/, async (req, { m }) => ({ user: users.publicUser(users.block(Number(m[1]))) }));
@@ -99,14 +100,8 @@ on('POST', /^\/api\/users\/(\d+)$/, async (req, { m, b }) => ({ user: users.publ
 on('POST', /^\/api\/users\/(\d+)\/access$/, async (req, { m, b }) => ({ user: users.publicUser(users.setAccessUntil(Number(m[1]), b || {})) }));
 on('GET', /^\/api\/integrations$/, async () => ({ google: INTEG.googleSetup() }));
 on('POST', /^\/api\/integrations\/google$/, async (req, { b }) => ({ google: INTEG.setGoogleClient(b || {}) }));
-// 1.0.8: the admin's own chats and accounts (his web page), straight from the dashboard
-on('POST', /^\/api\/my-chats$/, async (req) => {
-  const ph = users.adminPhones()[0];
-  if (!ph) throw Object.assign(new Error('Add your phone number in Settings → Admin phone first.'), { status: 400 });
-  const u = portal.adminUser(ph);
-  const s = portal.openSession(u, clientIp(req), req.headers['user-agent']);
-  return { __headers: { 'Set-Cookie': `msa_uid=${s.id}; Max-Age=${Math.floor(portal.SESSION_TTL / 1000)}; ${ucookie()}` }, ok: true, go: '/me' };
-});
+// 1.1.0: no "My chats" from the dashboard. The admin's own chats are reached only by signing in with his phone number
+// (a code by text); the password sign-in opens the dashboard and nothing private.
 // 1.0.8: speed — where the time of the last replies went
 on('GET', /^\/api\/speed$/, async () => {
   const rows = all("SELECT id, user_id, created, updated, steps, timing FROM jobs WHERE status='done' AND timing IS NOT NULL ORDER BY id DESC LIMIT 30").map(r => ({ ...r, timing: JSON.parse(r.timing || '{}') }));
@@ -134,6 +129,7 @@ on('POST', /^\/api\/settings$/, async (req, { b }) => {
     if (k === 'alert_webhook' && v && !/^https:\/\/[^\s]+$/.test(v)) throw Object.assign(new Error('The alert address must start with https://'), { status: 400 });
     if (k === 'timezone') { try { new Date().toLocaleString('en-US', { timeZone: v }); } catch { throw Object.assign(new Error('Unknown timezone'), { status: 400 }); } }
     if (k === 'portal_enabled') { portal.setEnabled(v === '1', 'admin'); continue; }
+    if (k === 'connection_texts' && !['once', 'off', 'every'].includes(v)) throw Object.assign(new Error('Unknown choice for the connection texts'), { status: 400 });
     setSetting(k, v);
   }
   if (b.admin_phones !== undefined) {

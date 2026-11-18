@@ -68,11 +68,12 @@ Or put keys in `/etc/messageassistant/env` (bottom section, kept on updates), e.
 
 What people can text: any question or task, plus `HELP`, `STOP` / `START` (pause), `RESET` (fresh conversation), `NOTES` (what it remembers), `FORGET 3`, `FORGET ALL`.
 
-## Admin sign-in
+## Signing in
 
-- **Phone:** type your number → a 6-digit code arrives by text (valid 10 minutes, one code a minute, 5 an hour, 5 wrong tries per code).
-- **Password:** username `admin` + the password printed at install. Change it in Settings. Lost it? `sudo messageassistant reset-password` prints a new one (or `sudo messageassistant reset-password 'my new password'`).
-- Wrong passwords: 5 tries per 15 minutes per address and per username. Sessions last 12 hours.
+- **My phone number** (anyone approved, the admin too): type your number → a 6-digit code is texted to you (valid 10 minutes, one code a minute, 5 an hour, 5 wrong tries per code) → you see your own chat. If the number is the admin's, that page also shows **Manage system**, which opens the dashboard.
+- **Admin** (username + password): opens the dashboard only. It never shows anyone's private chat, and it has no way into the admin's own chats (use the phone door for that). The password is printed once at install. Change it in Settings. Lost it? `sudo messageassistant reset-password` prints a new one (or `sudo messageassistant reset-password 'my new password'`).
+- Wrong passwords: 5 tries per 15 minutes per address and per username. Dashboard sessions last 12 hours, chat sessions 30 days.
+- The dashboard shows a person's first text only while they wait for approval; after that their chats are private.
 
 ## Settings
 

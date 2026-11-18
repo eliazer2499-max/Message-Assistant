@@ -51,20 +51,30 @@ export async function startApp({ channel: given = null, env = process.env, start
   attachChannel(channel, { onFailed: (m, e) => alert('warn', `A text could not be sent after 3 tries (${m.kind}): ${String(e.message).slice(0, 150)}`, { rcs: false, key: 'send-failed' }) });
   alertsChannelState(() => channel.status().state);
   channel.on('message', (m) => handleIncoming(m).catch(e => log('router', 'failed:', e.message)));
-  let dropTimer = null, droppedAlerted = false;
+  // 1.1.0: Settings → "Connection texts": once (default) = ONE text when Messages has been down for a minute and ONE when it is
+  // back and has stayed up for 10 minutes (a phone that goes on and off every few minutes is one problem, not many);
+  // off = the dashboard banner / alert address only, no text; every = the old way (a text at every drop and every return).
+  const connMode = () => (['once', 'off', 'every'].includes(setting('connection_texts')) ? setting('connection_texts') : 'once');
+  const stableMs = cfg.testMode ? Number(env.MSA_STABLE_MS || 200) : 10 * 60000;
+  let dropTimer = null, droppedAlerted = false, stableTimer = null;
   channel.on('state', ({ state, prev, detail }) => {
     setSetting('gm_state', state); setSetting('gm_state_since', String(Date.now()));
     audit('system', 'messages.state', `${prev} → ${state}${detail ? ' (' + detail + ')' : ''}`);
     if (state === 'connected') {
       clearTimeout(dropTimer); dropTimer = null;
-      if (droppedAlerted) { droppedAlerted = false; alert('info', 'Google Messages is connected again. Waiting texts are going out now.', { key: 'gm-back' }); }
+      if (droppedAlerted) {
+        const back = () => { droppedAlerted = false; alert('info', 'Google Messages is connected again. Waiting texts are going out now.', { key: 'gm-back', rcs: connMode() !== 'off' }); };
+        if (connMode() === 'every') back();
+        else if (!stableTimer) { stableTimer = setTimeout(() => { stableTimer = null; if (droppedAlerted && channel.status().state === 'connected') back(); }, stableMs); stableTimer.unref?.(); }
+      }
       drain();
-    } else if (!dropTimer && (prev === 'connected' || state === 'signed_out' || state === 'signin_blocked' || state === 'pairing' || state === 'error')) {
+    } else if (state !== 'connected' && stableTimer && state !== 'stopped') { clearTimeout(stableTimer); stableTimer = null; }
+    if (state !== 'connected' && !dropTimer && (prev === 'connected' || state === 'signed_out' || state === 'signin_blocked' || state === 'pairing' || state === 'error')) {
       // a short blip is normal; the admin hears about it if it lasts a minute
       dropTimer = setTimeout(() => {
         dropTimer = null;
         const s = channel.status();
-        if (s.state !== 'connected' && s.state !== 'stopped') {
+        if (s.state !== 'connected' && s.state !== 'stopped' && !(droppedAlerted && connMode() !== 'every')) {
           droppedAlerted = true;
           alert('error', `Google Messages is not connected: ${STATE_WORDS[s.state] || s.state}${s.detail ? ' (' + s.detail + ')' : ''}. Open the dashboard → Connect to fix it.`, { rcs: false, key: 'gm-down-' + s.state });
         }

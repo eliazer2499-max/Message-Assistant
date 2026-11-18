@@ -144,8 +144,9 @@ test('the admin signs in by phone like anyone, sees his chats, and "Manage syste
   const s = await c.get('/api/settings');
   assert.equal(s.status, 200, 'the same browser now has the admin dashboard'); assert.ok(s.data.settings);
   const d = client(base); await d.post('/api/login/password', { username: 'admin', password: 'pass-108-abcdef' });
-  const mc = await d.post('/api/my-chats'); assert.equal(mc.status, 200); assert.equal(mc.data.go, '/me');
-  assert.equal((await d.get('/api/u/me')).data.is_admin, true, 'dashboard → My chats signs him in to his own page');
+  // 1.1.0: the password (dashboard) sign-in opens NO private chat: "My chats" is gone; only the phone code opens the chats
+  const mc = await d.post('/api/my-chats'); assert.notEqual(mc.status, 200);
+  assert.notEqual((await d.get('/api/u/me')).data.signed_in, true, 'the dashboard sign-in does not open his own chats');
 });
 
 test('Connect accounts: admin adds his Google client; the person connects Google; the assistant reads it (read only); disconnect', async () => {

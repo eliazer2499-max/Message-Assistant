@@ -20,10 +20,10 @@
   <div class="card narrow authcard">
     <img src="icon.svg?v=__V__" class="logo big" width="72" height="72" alt="">
     <h1 class="sr">Message Assistant</h1>
-    <p class="authtitle">Admin sign-in</p>
-    <div class="tabs seg" id="loginTabs"><button data-t="phone" class="on">Phone code</button><button data-t="password">Password</button></div>
+    <p class="authtitle">Sign in</p>
+    <div class="tabs seg" id="loginTabs"><button data-t="phone" class="on">My phone number</button><button data-t="password">Admin</button></div>
     <form id="fPhone">
-      <label>Admin phone number<input id="lPhone" type="tel" autocomplete="tel" placeholder="+1 646 555 0100" required></label>
+      <label>Your phone number<input id="lPhone" type="tel" autocomplete="tel" placeholder="+1 646 555 0100" required></label>
       <button class="primary" type="submit">Text me a code</button>
     </form>
     <form id="fCode" class="hidden">
@@ -37,12 +37,12 @@
       <button class="primary" type="submit">Sign in</button>
     </form>
     <p id="loginMsg" class="msg"></p>
-    <p id="toPortal" class="authalt hidden">Using the assistant? <a href="/me">Open your chat →</a></p>
+    <p class="authalt muted small">Phone number: we text you a 6-digit code, then you see your own chat. The admin number also gets “Manage system” there. Admin: username and password, for the dashboard only.</p>
   </div>
 </div>
 
 <div id="app" class="screen hidden">
-  <header><img src="icon.svg?v=__V__" class="logo" width="32" height="32" alt=""><span id="brand">Message Assistant</span><span id="connDot" class="dot" title="Phone connection"></span><button id="myChats" class="ghost small" type="button" title="Your own chats and connected accounts">💬 My chats</button><button id="logout" class="link">Sign out</button></header>
+  <header><img src="icon.svg?v=__V__" class="logo" width="32" height="32" alt=""><span id="brand">Message Assistant</span><span id="connDot" class="dot" title="Phone connection"></span><button id="logout" class="link">Sign out</button></header>
   <div id="banner" class="banner hidden"></div>
   <main>
     <section id="v-home" class="view">
@@ -145,6 +145,8 @@
         <label class="check"><input type="checkbox" data-s="portal_enabled"> People can sign in to their own web chat with their phone number (<span id="portalUrl">/me</span>)</label>
         <label class="check"><input type="checkbox" data-s="update_notify"> Text me when a new version is out (once a day check; it never installs by itself)</label>
         <label>Alert address (optional, free: https://ntfy.sh/your-secret-topic)<input data-s="alert_webhook" placeholder="https://ntfy.sh/…"></label>
+        <label>Texts to me when Google Messages disconnects
+          <select data-s="connection_texts"><option value="once">Once: a single text per outage, when it is back for good (recommended)</option><option value="off">Never: only the dashboard banner and the alert address</option><option value="every">Every time it drops or comes back</option></select></label>
         <div class="row"><button class="primary" id="saveSettings">Save</button><button id="backupBtn">Back up now</button></div>
         <p id="setMsg" class="msg"></p>
       </div>

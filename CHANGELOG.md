@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0 — 2026-11-18
+- **Two separate doors on the sign-in page.** **My phone number**: type your number, a 6-digit code is texted to you, and you see your own chat page. **Admin**: username and password, for the dashboard only. The admin's own number signs in through the phone door like everyone and then also gets **Manage system** on that page. The password sign-in no longer opens any private chat (the "My chats" button is gone).
+- **The dashboard no longer shows people's chats.** People → Details used to list a person's recent texts, and the first text of every person stayed visible after approval. Now texts are shown to the admin only while a person is waiting for approval (to decide), and the activity list no longer carries the text of what was sent to people. Notes and reminders are still shown (and can be deleted), as before.
+- **One text per outage.** Settings → **Texts to me when Google Messages disconnects**: **Once** (default) = a single text, sent when Messages is back and has stayed up for 10 minutes, so a phone that goes on and off every few minutes is one problem, not a text every few minutes; **Never** = only the dashboard banner and the alert address; **Every time** = the old way.
+
 ## 1.0.9 — 2026-11-18
 - **Texts that arrive while the server or the phone is away are answered.** The app remembers when it last had a working chat list. After a restart it answers the chats that got a text since then (before, they were dropped as "old history"). Anything older than 3 days is still left alone.
 - **It heals itself when the phone is "not reachable".** After 90 seconds it reloads the Messages page; after 6 minutes it restarts the browser (at most every 15 minutes). Before, it waited, and one outage lasted about 50 hours.

@@ -8,6 +8,7 @@ import { enqueueText } from './outbox.js';
 const recentAlerts = new Map();
 let channelState = () => 'unknown';
 export function alertsChannelState(fn) { channelState = fn; }
+export function _resetAlertsForTest() { recentAlerts.clear(); }
 export function alert(level, text, { rcs = true, key = null } = {}) {
   const k = key || text; const t = now();
   if (recentAlerts.has(k) && t - recentAlerts.get(k) < 10 * 60000) return false;
