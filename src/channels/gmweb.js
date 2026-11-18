@@ -62,6 +62,10 @@ export const SELECTORS = {
   // 1.0.2: pictures. A file box if the page has one, else the attach button's file chooser.
   attachInput: 'mws-message-compose input[type="file"], input[type="file"][accept*="image" i], input[type="file"]',
   attachButton: '[data-e2e-picker-button="ATTACHMENT"], button[aria-label*="Attach" i], button[aria-label*="Add media" i], button[aria-label*="file" i]',
+  // 1.1.4: reactions — hovering a message shows its actions (react / reply / more); the picker that opens holds
+  // the emoji buttons. Google's page can change: if these stop matching, reactions quietly stop (texts never do).
+  reactButton: 'button[aria-label*="React" i], [data-e2e-reaction-button], button[aria-label*="emoji" i]',
+  reactPicker: '[role="menu"], [role="dialog"], [class*="reaction" i], [class*="emoji" i]',
 };
 export const TEXTS = {
   otherTab: /(open|opened|active) in (another|a different|other) (window|tab|browser)|use (messages )?here/i,
@@ -214,6 +218,8 @@ export function newOutgoing(msgs, before, part) {
   return null;
 }
 /** Split a long reply into chat-sized parts (on paragraph / line / sentence ends where possible). */
+/** 1.1.4: audio files (voice notes) — these never fall back to a link when attaching fails. */
+export const isAudioFile = (f) => /\.(mp3|m4a|ogg|opus|wav|aac|flac)$/i.test(String(f || ''));
 export function splitText(text, max = 1500) {
   const out = []; let s = String(text || '').trim();
   while (s.length > max) {
@@ -738,9 +744,13 @@ export class GoogleMessagesWeb extends EventEmitter {
       if (!id) id = await this.newChat(phone);
       await this.openChat(id);
       // 1.0.2: a picture first; if this page won't take it, its private link goes as text instead (never lost)
+      // 1.1.4: AUDIO never falls back to a link — the people using this have no internet, so a link to a voice
+      // note is worthless to them (Abish got links instead of the audio). Fail instead: the outbox retries, and
+      // attachAndSend now waits properly for bigger files (the old fixed waits were too short for audio).
       if (media && !skipParts) {
         let ok = false;
         try { await this.attachAndSend(media); ok = true; } catch (e) { this.lastAttachError = String(e.message || e).slice(0, 200); }
+        if (!ok && isAudioFile(media)) { const e = new Error('the audio file could not be attached in Google Messages: ' + this.lastAttachError); e.partsDone = skipParts; e.convId = id; throw e; }
         if (!ok && mediaUrl) text = (text ? text + '\n' : '') + mediaUrl;
       }
       // 1.0.7: each part must show up in the chat as sent (not "Sending…") before the next one; a part that
@@ -814,17 +824,55 @@ export class GoogleMessagesWeb extends EventEmitter {
       const [chooser] = await Promise.all([this.page.waitForEvent('filechooser', { timeout: 8000 }), btn.click({ timeout: 5000 })]);
       await chooser.setFiles(file);
     }
-    await sleep(this.opts.attachWaitMs ?? 1500);
+    // 1.1.4: bigger files (voice notes, not screenshots) need time to become a sendable preview before Send is
+    // pressed, and time to show as sent after — scale both waits with the file size (the fixed 1.5 s / 25 s
+    // were too short for audio, which is why audio "failed" and went out as a link)
+    let mb = 0; try { mb = fs.statSync(file).size / 1048576; } catch {}
+    await sleep(Math.min(10000, (this.opts.attachWaitMs ?? 1500) + Math.round(mb * 400)));
     const send = this.page.locator(this.sel.sendButton).first();
     if (await send.count()) await send.click({ timeout: 8000 }).catch(() => this.page.locator(this.sel.composer).first().press('Enter'));
     else await this.page.locator(this.sel.composer).first().press('Enter');
-    const end = Date.now() + 25000;
+    const end = Date.now() + Math.min(120000, 25000 + Math.round(mb * 2500));
     while (Date.now() < end) {
       const now = await outs();
       if (now.length > before.length || (now.length && now[now.length - 1].id && now[now.length - 1].id !== lastId)) { await sleep(this.opts.betweenSendsMs ?? 700); return true; }
       await sleep(400);
     }
-    throw new Error('the picture did not appear as sent');
+    throw new Error('the file did not appear as sent');
+  }
+  /** 1.1.4: react to the person's newest incoming message in this chat (RCS reaction on their bubble).
+   *  Best effort by design: if Google's hover/picker UI does not match, this throws and the caller drops it —
+   *  a missed reaction must never hold up a text. */
+  react({ convId = null, phone = null, emoji }) {
+    return this.enqueue('send', async () => {
+      if (this.state !== 'connected') { const e = new Error('Messages is not connected (' + this.state + ')'); e.notConnected = true; throw e; }
+      let id = convId;
+      if (!id) id = await this.newChat(phone);
+      await this.openChat(id);
+      const p = this.page;
+      // which of the message bubbles are incoming (the page marks ours with is-outgoing)
+      const kinds = await p.evaluate((sel) => [...document.querySelectorAll(sel.message)].map(w => w.getAttribute(sel.outgoingAttr) === 'true'), this.sel).catch(() => []);
+      let idx = -1; for (let i = kinds.length - 1; i >= 0; i--) if (!kinds[i]) { idx = i; break; }
+      if (idx < 0) throw new Error('no incoming message to react to');
+      const bubble = p.locator(this.sel.message).nth(idx);
+      await bubble.hover({ timeout: 5000 });
+      await sleep(this.opts.reactSettleMs ?? 500);
+      const reactBtn = p.locator(this.sel.reactButton).first();
+      if (!(await reactBtn.count())) throw new Error('no react button on this page');
+      await reactBtn.click({ timeout: 5000 });
+      await sleep(this.opts.reactSettleMs ?? 500);
+      // the picker: a button whose label or text IS the emoji; if ours is not offered, 👍 is the honest fallback
+      const pick = async (e) => p.evaluate((em) => {
+        const els = [...document.querySelectorAll('button, [role="button"], [role="menuitem"], span')];
+        const hit = els.find(x => { const t = (x.textContent || '').trim(); const a = x.getAttribute && (x.getAttribute('aria-label') || ''); return t === em || a.includes(em); });
+        if (hit) { (hit.closest('button, [role="button"], [role="menuitem"]') || hit).click(); return true; }
+        return false;
+      }, e).catch(() => false);
+      if (!(await pick(emoji)) && emoji !== '👍') await pick('👍');
+      await sleep(300);
+      await p.goto(this.url + '/conversations', { waitUntil: 'domcontentloaded' }).catch(() => {});
+      return { ok: true, convId: id };
+    });
   }
   /** Wait for the part we just sent: 'sent' (our new bubble, without the clock/Sending… state), 'pending', 'failed' or 'none'. */
   async waitOutgoing(before, ms, part = null) {

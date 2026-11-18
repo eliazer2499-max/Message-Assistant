@@ -55,6 +55,8 @@ function ensureTable() {
   if (!all('PRAGMA table_info(ai_keys)').some(c => c.name === 'caps')) db.exec('ALTER TABLE ai_keys ADD COLUMN caps TEXT');
   // 2.3.12 → 2.3.13: a Cloudflare key's chat model (its picture model stays in "model"). Empty = the default chat model.
   if (!all('PRAGMA table_info(ai_keys)').some(c => c.name === 'chat_model')) db.exec('ALTER TABLE ai_keys ADD COLUMN chat_model TEXT');
+  // 1.1.4: a key can belong to one person (user_id > 0) — their own brain keys. 0 / NULL = a system key (the admin's).
+  if (!all('PRAGMA table_info(ai_keys)').some(c => c.name === 'user_id')) db.exec('ALTER TABLE ai_keys ADD COLUMN user_id INTEGER DEFAULT 0');
 }
 
 // ---------------- 2.3.2: what the model can do ("caps"), found by Test ----------------
@@ -189,10 +191,10 @@ export function ensureKeys() {
   }
 }
 
-function insertKey(k, value) {
+function insertKey(k, value, userId = 0) {
   const pos = (get('SELECT MAX(position) AS p FROM ai_keys').p ?? 0) + 1;
-  const r = run('INSERT INTO ai_keys(name,kind,base_url,model,active,position,created,cool_until,use_for,chat_model) VALUES(?,?,?,?,?,?,?,0,?,?)',
-    k.name, k.kind, k.base_url || '', k.model || '', k.active ? 1 : 0, pos, now(), (k.use_for || defaultUses(k.kind)).join(','), k.chat_model || '');
+  const r = run('INSERT INTO ai_keys(name,kind,base_url,model,active,position,created,cool_until,use_for,chat_model,user_id) VALUES(?,?,?,?,?,?,?,0,?,?,?)',
+    k.name, k.kind, k.base_url || '', k.model || '', k.active ? 1 : 0, pos, now(), (k.use_for || defaultUses(k.kind)).join(','), k.chat_model || '', Number(userId) || 0);
   const id = Number(r.lastInsertRowid);
   if (value) setSecret(SEC(id), String(value).trim());
   return id;
@@ -234,7 +236,9 @@ const baseFor = (kind, b, fallback) => kind === 'openai' ? cleanBase(b.base_url)
 // ---------- CRUD (no key value ever leaves these functions) ----------
 export function keyRow(id) { ensureKeys(); return get('SELECT * FROM ai_keys WHERE id=?', Number(id)); }
 export function keyValue(id) { return secret(SEC(id)); }
-export function listRows() { ensureKeys(); return all('SELECT * FROM ai_keys ORDER BY position, id'); }
+export function listRows({ userId = 0 } = {}) { ensureKeys(); return userId > 0
+  ? all('SELECT * FROM ai_keys WHERE user_id=? ORDER BY position, id', Number(userId))
+  : all('SELECT * FROM ai_keys WHERE user_id IS NULL OR user_id=0 ORDER BY position, id'); }
 
 /** ok | cooling | bad | off | no_key — what the dashboard shows next to each key. */
 export function keyStatus(r, t = now()) {
@@ -259,7 +263,7 @@ export function publicKey(r) {
 }
 export function listKeys() { return listRows().map(publicKey); }
 
-export function addKey(b) {
+export function addKey(b, userId = 0) {
   ensureKeys();
   const kind = cleanKind(b.kind);
   const k = { name: cleanName(b.name), kind, base_url: baseFor(kind, b), model: cleanModel(b.model, kind), active: b.active === undefined ? 1 : (b.active ? 1 : 0), use_for: cleanUses(b.use_for, kind),
@@ -268,8 +272,8 @@ export function addKey(b) {
   if (kind === 'gemini' && !value) throw httpErr(400, 'Paste the key (from aistudio.google.com/apikey)');
   if (kind === 'cloudflare' && !value) throw httpErr(400, 'Paste the API token (Cloudflare: My Profile → API Tokens → Create Token → "Workers AI" template)');
   if (kind === 'cloudflare' && (value.length > 1000 || /\s/.test(value))) throw httpErr(400, 'That doesn\'t look like a token. Paste just the token.');
-  const id = insertKey(k, value);
-  audit('admin', 'brain.key_added', `"${k.name}" (${kindLabel(kind)}${k.active ? ', active' : ', inactive'})`);
+  const id = insertKey(k, value, userId);
+  audit(userId ? 'user#' + userId : 'admin', 'brain.key_added', `"${k.name}" (${kindLabel(kind)}${k.active ? ', active' : ', inactive'})${userId ? ' — their own key' : ''}`);
   return publicKey(keyRow(id));
 }
 /**
@@ -527,8 +531,8 @@ export function markFail(id, c, { fromTest = false } = {}) {
  * for it come first (in his order), then every other active key as a fallback. withMedia = the request
  * carries a voice note, photo or PDF: Gemini keys first in both groups (they can hear and see).
  */
-export function usableKeys({ withMedia = false, use = null, mediaKinds = [] } = {}) {
-  const rows = listRows().filter(r => r.active && (r.kind === 'openai' || hasSecret(SEC(r.id))) && (r.kind !== 'cloudflare' || use === 'pictures' || usesOf(r).some(u => CF_CHAT_USES.includes(u))));   // 2.3.11: Cloudflare keys make pictures; 2.3.13: and chat when he ticked Chat or Background jobs
+function pickUsable(rows, { withMedia = false, use = null, mediaKinds = [] } = {}) {
+  rows = rows.filter(r => r.active && (r.kind === 'openai' || hasSecret(SEC(r.id))) && (r.kind !== 'cloudflare' || use === 'pictures' || usesOf(r).some(u => CF_CHAT_USES.includes(u))));   // 2.3.11: Cloudflare keys make pictures; 2.3.13: and chat when he ticked Chat or Background jobs
   const groups = use ? [rows.filter(r => usesOf(r).includes(use)), rows.filter(r => !usesOf(r).includes(use))] : [rows];
   let out = [];
   if (withMedia) { for (const g of groups) out.push(...g.filter(r => r.kind === 'gemini')); for (const g of groups) out.push(...g.filter(r => r.kind !== 'gemini')); }
@@ -537,6 +541,41 @@ export function usableKeys({ withMedia = false, use = null, mediaKinds = [] } = 
   // it is only used when nothing else answers, and then the media reaches it as a short note instead.
   if (mediaKinds.length) { const ok = out.filter(r => !cannotTake(r, mediaKinds).length); out = [...ok, ...out.filter(r => !ok.includes(r))]; }
   return out.map(r => ({ ...r, tagged: !use || usesOf(r).includes(use), cannot: mediaKinds.length ? cannotTake(r, mediaKinds) : [] }));
+}
+/**
+ * The chain for one call. Default: the system's keys. 1.1.4: when the admin's switch allows it and THIS
+ * person saved their own keys, their keys come first (in their order) and the system keys are the backup —
+ * exactly what Abish asked for: "instead of using our APIs they can set their own".
+ */
+export function usableKeys(opts = {}) {
+  const sys = pickUsable(listRows(), opts);
+  const uid = Number(opts.userId) || 0;
+  if (!uid || !ownAiAllowed()) return sys;
+  const own = pickUsable(listRows({ userId: uid }), opts);
+  if (!own.length) return sys;
+  const seen = new Set(own.map(k => k.id));
+  return [...own, ...sys.filter(k => !seen.has(k.id))];
+}
+// ---------- 1.1.4: a person's own AI keys (the switch + their page) ----------
+export const ownAiAllowed = () => setting('allow_own_ai_keys') !== '0';
+export function listUserKeys(userId) { return listRows({ userId }).map(publicKey); }
+/** Add a key from the person's simple form: a provider preset + the pasted key (+ account id / base / model where the preset needs them). */
+export function addUserKey(userId, b = {}) {
+  if (!ownAiAllowed()) throw httpErr(403, 'The admin has turned off using your own AI keys.');
+  const p = PRESETS.find(x => x.id === String(b.preset || 'gemini')) || PRESETS[0];
+  const body = { kind: p.kind, key: b.key, name: String(b.name || '').trim() || p.label + ' (mine)' };
+  if (p.kind === 'openai') { body.base_url = p.id === 'custom' ? b.base_url : p.base_url; body.model = p.id === 'custom' ? b.model : p.model; }
+  if (p.kind === 'cloudflare') { body.account_id = b.account_id; body.model = String(b.model || '').trim() || CF_DEFAULT_MODEL; }
+  return addKey(body, Number(userId));
+}
+export function removeUserKey(userId, id) {
+  const r = keyRow(id); if (!r || Number(r.user_id) !== Number(userId)) throw httpErr(404, 'That key was removed');
+  run('DELETE FROM ai_keys WHERE id=?', r.id);
+  if (r.kind === 'cloudflare') cfForgetKey(r.id);
+  setSecret(SEC(r.id), '');
+  setSetting('ai_key_limit_' + r.id, '');
+  audit('user#' + userId, 'brain.key_removed', `"${r.name}" — their own key`);
+  return { ok: true };
 }
 /** Gemini keys for picture creation: tagged "Pictures" first, then the other Gemini keys; free ones before resting ones. */
 export function geminiKeys() {

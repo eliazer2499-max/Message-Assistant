@@ -8,6 +8,7 @@ import { addUsage, setUserSettings, userSettings } from '../users.js';
 import * as B from '../browser.js';
 import { SITE_TOOLS } from './sites.js';
 import { MEDIA_TOOLS } from './media.js';
+import * as VAULT from '../vault.js';
 import { allowed as sitesAllowed } from '../sites.js';
 import { userById } from '../users.js';
 import * as INTEG from '../integrations.js';
@@ -274,6 +275,41 @@ export const TOOLS = [
 ];
 TOOLS.push(...SITE_TOOLS);     // 1.0.2
 TOOLS.push(...MEDIA_TOOLS);    // 1.1.1: extract audio from a video, media info (ffmpeg on the server)
+// 1.1.4: the secure vault — names only for the brain; browser_login fills the password in server-side.
+TOOLS.push(
+  { name: 'vault_list', description: 'List what THIS person keeps in their secure vault (their own page → Secure vault): logins, API tokens and secrets for any accounts (e.g. Cloudflare). You see labels only — never the secrets themselves.', params: {},
+    run: async (a, ctx) => ({ entries: VAULT.listEntries(ctx.userId).map(e => ({ id: e.id, label: e.label, kind: e.kind, ...(e.site ? { site: e.site } : {}), ...(e.username ? { username: e.username } : {}) })), note: 'To sign into a site, use browser_login with the entry label. Tokens/secrets cannot be read out — if a task needs one typed somewhere public, explain the vault keeps it sealed.' }) },
+  { name: 'browser_login', description: 'Sign into a website for this person using a LOGIN from their secure vault (see vault_list). The username and password are filled in directly by the server — you never see them. Give the entry label (or id); url optional (the entry\'s saved site is used otherwise). If the site then asks for a verification code, ask the person for it and type it with browser_type.',
+    params: { entry: S('Vault entry label or id, e.g. "Cloudflare"'), url: S('Optional: the sign-in page address') }, required: ['entry'],
+    run: async ({ entry, url }, ctx) => {
+      if (setting('browser_enabled') !== '1') return { error: 'The web browser is switched off by the admin.' };
+      const e = VAULT.findEntry(ctx.userId, entry);
+      if (!e) return { error: 'No vault entry matches that. Call vault_list to see what this person saved.' };
+      if (e.kind !== 'login') return { error: `"${e.label}" is a ${e.kind}, not a website login, so there is nothing to sign in with.` };
+      const password = VAULT.secretOf(e.id);
+      if (!password) return { error: `"${e.label}" has no password saved. Ask the person to save it again on their page.` };
+      const t0 = Date.now();
+      try {
+        return await B.inBrowserQueue(ctx.userId, async () => {
+          const page = await B.userPage(ctx.userId);
+          const target = url || e.site;
+          if (target) { const u = B.cleanUrl(target); await B.assertPublicUrl(u); await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 30000 }); await B.settle(page); }
+          const pw = page.locator('input[type="password"]').first();
+          if (await pw.count() === 0) return pageNow(page, { note: `No password box on this page. Open the sign-in page of ${e.label} first (browser_open / browser_click), then call browser_login again with no url.` });
+          if (e.username) { const un = page.locator('input[type="email"], input[autocomplete="username"], input[name*="user" i], input[name*="email" i], input[type="text"]').first(); if (await un.count()) await un.fill(String(e.username)).catch(() => {}); }
+          await pw.fill(password);
+          const btn = page.locator('button[type="submit"], input[type="submit"]').first();
+          if (await btn.count()) await btn.click({ timeout: 8000 }).catch(async () => { await pw.press('Enter').catch(() => {}); });
+          else await pw.press('Enter').catch(() => {});
+          await B.settle(page);
+          return pageNow(page, { signed_in_with: e.label, note: 'If the site asks for a verification code, ask the person for it and type it with browser_type. Never ask them for the password itself — the vault has it.' });
+        });
+      } catch (err) {
+        if (err instanceof B.Refused) return { error: err.message };
+        return { error: 'Sign-in failed: ' + String(err.message || err).slice(0, 300) };
+      } finally { ctx.browserMs = (ctx.browserMs || 0) + (Date.now() - t0); }
+    } },
+);
 
 /** The tools offered for one person (site tools only when the admin allows sites for them). */
 export function declarations(list = TOOLS, user = null) {

@@ -291,6 +291,7 @@ const TOOL_WORDS = [
   [/update|version/i, /^check_update$/], [/remember|memory|forget/i, /^memory_/], [/search|look up|find|news|price|weather/i, /^web_|^latest_news$/],
   [/video|audio|mp3|soundtrack|extract|convert/i, /^extract_audio$|^media_info$|^youtube_audio$/], [/news|headline|latest|happened today/i, /^latest_news$/],
   [/youtube|song|music|listen|shiur|lecture|niggun/i, /^youtube_audio$/],
+  [/vault|password|sign in|log in|login|my account|cloudflare|token/i, /^vault_list$|^browser_login$|^browser_open$|^browser_click$|^browser_type$|^browser_read$/],
 ];
 function shortTool(t) {
   const cut = (x, n) => { x = String(x || ''); const one = x.split(/(?<=[.!?])\s/)[0]; return (one.length <= n ? one : x.slice(0, n - 1) + '…'); };
@@ -402,7 +403,7 @@ export async function callModel(args, opts = {}) {
   }
   const withMedia = heavyMedia(args.items || []);
   const use = opts.use && aikeys.USES.includes(opts.use) ? opts.use : null;
-  const keys = aikeys.usableKeys({ withMedia, use, mediaKinds: mediaKindsOf(args.items || []) });
+  const keys = aikeys.usableKeys({ withMedia, use, mediaKinds: mediaKindsOf(args.items || []), userId: Number(opts.userId) || 0 });   // 1.1.4: this person's own keys first, when they have any
   if (!keys.length) {
     const any = aikeys.listRows().length;
     const e = userError(any ? 'All AI keys are switched off (or have no key saved). Open the dashboard → AI keys and switch one on.'

@@ -27,6 +27,35 @@ export function enqueueText({ userId = null, toPhone = null, convId = null, text
 }
 export function startOutbox(ms = 3000) { if (!timer) { timer = setInterval(drain, ms); timer.unref?.(); } }
 export function stopOutbox() { if (timer) clearInterval(timer); timer = null; }
+// 1.1.4: reactions are not texts — a small in-memory queue, worked off first in drain() (they should land while
+// the person is still looking at their message). Best effort: two tries, then dropped; a restart forgets them.
+const reactionQueue = [];
+export function enqueueReaction({ userId, emoji }) {
+  if (!userId || !emoji) return;
+  const old = reactionQueue.findIndex(r => r.userId === userId);
+  if (old >= 0) reactionQueue.splice(old, 1);            // only their newest message needs the reaction
+  reactionQueue.push({ userId, emoji, tries: 0 });
+  if (reactionQueue.length > 50) reactionQueue.splice(0, reactionQueue.length - 50);
+  setImmediate(drain);
+}
+export const _reactions = () => reactionQueue.length;
+async function drainReactions() {
+  if (!channel || typeof channel.react !== 'function') { reactionQueue.length = 0; return; }
+  while (reactionQueue.length) {
+    const r = reactionQueue[0];
+    const u = userById(r.userId);
+    if (!u) { reactionQueue.shift(); continue; }
+    try {
+      await channel.react({ convId: u.conv_id || null, phone: u.phone && !u.phone.startsWith('conv:') ? u.phone : null, emoji: r.emoji });
+      reactionQueue.shift();
+    } catch (e) {
+      if (e.notConnected) return;                          // Messages is down: try again on the next drain
+      r.tries++;
+      if (r.tries >= 2) { reactionQueue.shift(); log('outbox', `reaction ${r.emoji} for user ${r.userId} dropped:`, String(e.message).slice(0, 120)); }
+      else return;
+    }
+  }
+}
 export function pending() { return get("SELECT COUNT(*) AS n FROM outbox WHERE status IN ('queued','unconfirmed')").n; }
 // 1.0.7: when to look again at a text Google Messages had not shown as sent (15 s, 30 s, 1, 2, 4, 8, 16 min, then given up)
 export const CHECK_AFTER_MS = [15000, 30000, 60000, 120000, 240000, 480000, 960000];
@@ -36,6 +65,7 @@ export async function drain() {
   try {
     for (;;) {
       if (channel.status().state !== 'connected') return;
+      await drainReactions();                              // 1.1.4: reactions first — they are quick and time-sensitive
       if (await checkUnconfirmed()) continue;
       const tnow = Date.now();
       const m = all("SELECT * FROM outbox WHERE status='queued' ORDER BY priority, id LIMIT 50").find(r => (holdUntil.get(r.id) || 0) <= tnow);

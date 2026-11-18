@@ -70,6 +70,10 @@ export function openDb(file) {
   db.exec('CREATE TABLE IF NOT EXISTS oauth_states (state TEXT PRIMARY KEY, user_id INTEGER, provider TEXT, created INTEGER, back TEXT)');
   // 1.1.3: a connection remembers whose Google client made it (the system's, or the person's own keys); the OAuth try remembers it too
   add('connections', 'client', "TEXT DEFAULT 'system'"); add('oauth_states', 'via', "TEXT DEFAULT 'system'");
+  // 1.1.4: the secure vault — a person's own logins / tokens / secrets for any account; the secret itself is
+  // sealed in the secrets table (like the AI keys), this table only holds the label and non-secret fields
+  db.exec(`CREATE TABLE IF NOT EXISTS vault_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, label TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'login', site TEXT, username TEXT, created INTEGER, updated INTEGER)`);
   add('outbox', 'parts_done', 'INTEGER DEFAULT 0'); add('outbox', 'check_at', 'INTEGER'); add('outbox', 'checks', 'INTEGER DEFAULT 0'); add('outbox', 'check_text', 'TEXT');
   if (get('PRAGMA user_version').user_version < 2) db.exec('PRAGMA user_version=2');
   return db;
@@ -109,6 +113,9 @@ export const DEFAULTS = {
   expired_text: 'Your access to {name} has ended. Please contact the admin if you would like to keep using it. Thank you!',   // 1.0.8
   tool_rounds: '3',                             // 1.0.8: at most this many rounds of tools (search, browser…) per message, then it answers
   fast_chat: '1',                               // 1.0.8: plain chat ("hi", "thanks") is answered in ONE AI call, no tools
+  reactions: '1',                               // 1.1.4: react to a person's message with the emoji that fits what they asked
+  google_connect_enabled: '1',                  // 1.1.4: Google connect (each person connects their own Google account) is an admin option
+  allow_own_ai_keys: '1',                       // 1.1.4: people may add their OWN AI keys (the brain) and run on them instead of the system's
   google_client_id: '',                         // 1.0.8: the admin's own Google OAuth client (Connect accounts); the secret is sealed
   sites_mode: 'all',                            // 1.0.2: who can build sites: all | chosen | off
   sites_approval: '0',                          // 1.0.2: 1 = the admin approves every publish too

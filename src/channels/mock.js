@@ -36,6 +36,14 @@ export class MockChannel extends EventEmitter {
     this.sent.push({ convId: c, phone: p, text, ts: Date.now(), ...(media ? { media, mediaUrl } : {}) });
     return { ok: true, convId: c };
   }
+  /** 1.1.4: react to the person's last message (RCS reaction). Recorded for tests. */
+  async react({ convId = null, phone = null, emoji }) {
+    if (this.state !== 'connected') { const e = new Error('Messages is not connected'); e.notConnected = true; throw e; }
+    const c = convId || (phone ? this.convFor(phone) : null);
+    if (!c) throw new Error('no conversation');
+    (this.reactions ||= []).push({ convId: c, phone: phone || '', emoji, ts: Date.now() });
+    return { ok: true, convId: c };
+  }
   async confirmSent({ convId, text }) {
     this.checks++;
     const r = typeof this.confirmAs === 'function' ? this.confirmAs(this.checks) : this.confirmAs;

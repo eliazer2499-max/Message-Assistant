@@ -130,9 +130,10 @@ export function oldestTs(userId) {
 }
 export function me(s) {
   const p = publicUser(s.user);
-  const g = INTEG.effectiveClient(s.user.id);   // 1.1.3: ready when the system keys OR the person's own keys can connect
+  const g = INTEG.googleSetup();   // Google connect: the admin's client; ready only when it is also turned on
+  const genabled = INTEG.googleEnabled();
   return { signed_in: true, csrf: s.csrf, name: (p.settings && p.settings.name) || p.name || '', phone: p.phone,
     is_admin: isAdminPhone(s.user.phone),                                   // 1.0.8: shows "Manage system"
     access_until: s.user.access_until || null, access_ended: accessEnded(s.user),
-    connections: INTEG.list(s.user.id), google_ready: g.ready, google_via: g.via, oldest: oldestTs(s.user.id) };
+    connections: INTEG.list(s.user.id), google_ready: genabled && g.ready, google_enabled: genabled, oldest: oldestTs(s.user.id) };
 }

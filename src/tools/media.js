@@ -9,6 +9,7 @@ import { execFile } from 'node:child_process';
 import { cfg } from '../config.js';
 import * as B from '../browser.js';
 import * as S from '../sites.js';
+import { get as dbGet, run as dbRun } from '../db.js';
 
 const S_ = (description, extra = {}) => ({ type: 'string', description, ...extra });
 const MAX_BYTES = 200 * 1024 * 1024;          // what we will download / convert for one message
@@ -140,33 +141,89 @@ export async function sendAudioParts(ctx, file, fmt, displayName, dir) {
 async function ytdlpTitle(target) {
   try { const bin = await ytdlpPath(); const { stdout } = await run(bin, ['--js-runtimes', 'node', '--playlist-items', '1', '--get-title', target], 60000); return stdout.split('\n')[0].trim().slice(0, 120); } catch { return ''; }
 }
-async function youtubeAudio({ query, url, format, source }, ctx) {
+// 1.1.4: BEFORE anything is sent, the person confirms it is the right one (Abish: "first send the thumbnail and
+// the details — and the release date, how long it is — to confirm that this is the actual one I want, and then
+// when it gets the okay it should send out that one"). So youtube_audio works in two steps: a call without
+// `confirm` only PREVIEWS (thumbnail attached + details, nothing downloaded); the download happens on the
+// follow-up call with confirm:true, after the person said yes. The pending choice is kept per person.
+async function videoInfo(target) {
+  const bin = await ytdlpPath();
+  const { stdout } = await run(bin, ['--js-runtimes', 'node', '--playlist-items', '1', '--dump-single-json', '--no-warnings', target], 90000);
+  const j = JSON.parse(stdout || '{}');
+  const e = Array.isArray(j.entries) ? (j.entries.find(Boolean) || {}) : j;
+  return { id: e.id || '', title: e.title || '', by: e.uploader || e.channel || e.artist || '', uploaded: e.upload_date || '',
+    duration_seconds: e.duration ? Math.round(Number(e.duration)) : null, thumb: e.thumbnail || (e.id ? `https://i.ytimg.com/vi/${e.id}/hqdefault.jpg` : ''),
+    url: e.webpage_url || (e.id ? 'https://www.youtube.com/watch?v=' + e.id : target) };
+}
+export const fmtDate = (yyyymmdd) => { const m = /^(\d{4})(\d{2})(\d{2})$/.exec(String(yyyymmdd || '')); if (!m) return ''; try { return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }); } catch { return ''; } };
+export const durText = (s) => { if (!s) return ''; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`; };
+async function attachThumbnail(ctx, info) {
+  if (!info.thumb) return false;
+  try {
+    const u = await B.assertPublicUrl(B.cleanUrl(info.thumb));
+    const r = await fetch(u, { redirect: 'follow', signal: AbortSignal.timeout(20000), headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!r.ok) return false;
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (!buf.length || buf.length > 5 * 1024 * 1024) return false;
+    const media = S.saveMedia(buf, { userId: ctx.userId, ext: 'jpg', name: 'thumbnail.jpg' });
+    ctx.files = [...(ctx.files || []), { media, type: 'image/jpeg' }];
+    return true;
+  } catch { return false; }
+}
+// the pending preview lives in the settings table (users.setUserSettings only keeps name/timezone/language/style)
+const PKEY = (ctx) => 'pending_yt_' + Number(ctx.userId);
+const getPending = (ctx) => { try { const r = dbGet('SELECT v FROM settings WHERE k=?', PKEY(ctx)); return r ? JSON.parse(r.v) : null; } catch { return null; } };
+const setPending = (ctx, p) => { try { if (p) dbRun('INSERT INTO settings(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v', PKEY(ctx), JSON.stringify(p)); else dbRun('DELETE FROM settings WHERE k=?', PKEY(ctx)); } catch {} };
+async function youtubeAudio({ query, url, format, source, confirm, pick }, ctx) {
   if (!(await ffmpegOk())) return { error: NO_FFMPEG };
   if (!(await ytdlpPath())) return { error: NO_YTDLP };
   const fmt = ['mp3', 'm4a', 'ogg'].includes(String(format || 'mp3').toLowerCase()) ? String(format || 'mp3').toLowerCase() : 'mp3';
+  // ---- step 2: they said yes → download the pending one and send the audio itself ----
+  if (confirm) {
+    const p = getPending(ctx);
+    if (!p || Date.now() - (p.ts || 0) > 30 * 60000) return { error: 'There is no video waiting for a yes. Ask me to find it again, and I will show it first.' };
+    const chosen = p.matches[p.pick || 0] || p.matches[0];
+    setPending(ctx, null);
+    const dir = workdir(ctx.userId);
+    try {
+      const f = await youtubeToFile(chosen.url, p.fmt || fmt, dir);
+      return { ...(await sendAudioParts(ctx, f, p.fmt || fmt, p.title || chosen.title || 'YouTube audio', dir)), ...(p.title ? { title: p.title } : {}), source: p.source || 'YouTube' };
+    } catch (e) { return { error: e.noYtdlp ? NO_YTDLP : 'Download failed: ' + errLine(e) }; }
+    finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+  // ---- step 1: preview (or preview another match with pick) ----
   const music = String(source || '').toLowerCase() === 'music' || /music\.youtube\.com/i.test(String(url || ''));
-  let target = '', title = '';
-  if (url && isYoutubeUrl(url)) { target = String(url); }
+  let matches = null, prev = getPending(ctx);
+  if (pick) {
+    if (!prev || !Array.isArray(prev.matches) || !prev.matches[Number(pick) - 1]) return { error: 'There is no other match number ' + pick + ' waiting. Search again with different words.' };
+    matches = prev.matches;
+  } else if (url && isYoutubeUrl(url)) { matches = [{ url: String(url), title: '' }]; }
   else {
     const q = String(query || url || '').trim();
     if (!q) return { error: 'Tell me what to look for (a name or a few words).' };
-    if (music) { target = 'https://music.youtube.com/search?q=' + encodeURIComponent(q); title = await ytdlpTitle(target); }   // 1.1.3: YouTube Music search
+    if (music) matches = [{ url: 'https://music.youtube.com/search?q=' + encodeURIComponent(q), title: '' }];
     else {
-      try { const found = await searchYoutube(q); if (found.length) { target = found[0].url; title = found[0].title; } } catch {}
-      if (!target) target = 'ytsearch1:' + q;      // yt-dlp searches itself when the page scrape fails
+      try { const found = await searchYoutube(q); if (found.length) matches = found.map(v => ({ url: v.url, title: v.title })); } catch {}
+      if (!matches) matches = [{ url: 'ytsearch1:' + q, title: '' }];
     }
   }
-  const dir = workdir(ctx.userId);
-  try {
-    const f = await youtubeToFile(target, fmt, dir);
-    return { ...(await sendAudioParts(ctx, f, fmt, title || (music ? 'YouTube Music audio' : 'YouTube audio'), dir)), ...(title ? { title } : {}), source: music ? 'YouTube Music' : 'YouTube' };
-  } catch (e) { return { error: e.noYtdlp ? NO_YTDLP : (music ? 'YouTube Music' : 'YouTube') + ' download failed: ' + errLine(e) }; }
-  finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  const pickIdx = pick ? Number(pick) - 1 : 0;
+  const chosen = matches[pickIdx];
+  let info;
+  try { info = await videoInfo(chosen.url); } catch (e) { return { error: (music ? 'YouTube Music' : 'YouTube') + ' could not read that video: ' + errLine(e) }; }
+  if (!info.title && chosen.title) info.title = chosen.title;
+  if (info.url && /^https:/.test(info.url)) matches[pickIdx] = { url: info.url, title: info.title };
+  const thumb = await attachThumbnail(ctx, info);
+  setPending(ctx, { matches, pick: pickIdx, title: info.title, source: music ? 'YouTube Music' : 'YouTube', fmt, ts: Date.now() });
+  return { preview: true, title: info.title, by: info.by, released: fmtDate(info.uploaded), duration: durText(info.duration_seconds), duration_seconds: info.duration_seconds,
+    source: music ? 'YouTube Music' : 'YouTube', thumbnail_attached: thumb,
+    other_matches: matches.slice(0, 4).map((m, i) => (i + 1) + '. ' + (m.title || '(video)')).filter((_, i) => i !== pickIdx),
+    note: 'STOP — nothing was downloaded. The thumbnail picture is attached to your answer. Now tell them: the title, who it is by, the release date and how long it is, and ASK if this is the one they want. When they say yes, call youtube_audio again with confirm:true and the audio will be sent. If they say it is the wrong one, call youtube_audio with pick:2 (or 3…) to show another match, or search again with different words.' };
 }
 
 export const MEDIA_TOOLS = [
-  { name: 'youtube_audio', description: 'Find a video on YouTube (or a song on YouTube Music) and send its AUDIO to the person as file(s) attached to your answer, like voice notes they can play — they have no internet and can never open a YouTube link, so NEVER answer a YouTube request with a link. Give search words (the video/song/shiur name) or a YouTube / YouTube Music link. The best match is sent, in full and in clear quality; when it is long it arrives as several voice-note parts, one after another.',
-    params: { query: S_('What to find, e.g. "Mordechai Shapiro Yedidim" or "shiur on emunah part 2"'), url: S_('A YouTube or YouTube Music link instead of search words (optional)'), source: S_('"music" to search YouTube Music instead of YouTube (songs) — only when they ask for YouTube Music'), format: S_('mp3 (default), m4a or ogg') },
+  { name: 'youtube_audio', description: 'Find a video on YouTube (or a song on YouTube Music) for a person with NO internet — NEVER answer with a link. It works in two steps: (1) call it with search words or a link: it shows a PREVIEW — the thumbnail picture is attached and you get the title, who made it, the release date and the length; present those and ASK if this is the one they want. (2) Only when they say yes, call it again with confirm:true — then the audio itself is downloaded and sent as voice-note file(s), in full; long ones arrive as several parts, one after another. If they say it is the wrong one, call with pick:2 (etc.) to preview another match, or search with different words.',
+    params: { query: S_('What to find, e.g. "Mordechai Shapiro Yedidim" or "shiur on emunah part 2"'), url: S_('A YouTube or YouTube Music link instead of search words (optional)'), source: S_('"music" to search YouTube Music instead of YouTube (songs) — only when they ask for YouTube Music'), format: S_('mp3 (default), m4a or ogg'), confirm: { type: 'boolean', description: 'true ONLY after the person said yes to the preview — downloads and sends the audio' }, pick: { type: 'number', description: 'Preview another match from the last search (2 = second match…)' } },
     run: async (a, ctx) => youtubeAudio(a, ctx) },
   { name: 'extract_audio', description: 'Extract the audio from a video (or convert an audio file) and send the person the audio FILE itself as an attachment to your answer. Give a direct link to the video/audio file (…mp4/.mov/.webm/.mp3), or a YouTube link (for YouTube search words use youtube_audio). format: mp3 (default), m4a or ogg. Use it when they ask for the audio/soundtrack of a video, or to turn a video into audio they can listen to.',
     params: { url: S_('Direct link to the video or audio file'), format: S_('mp3, m4a or ogg (default mp3)'), name: S_('File name to send (optional)') }, required: ['url'],
@@ -194,4 +251,4 @@ export const MEDIA_TOOLS = [
       finally { fs.rmSync(dir, { recursive: true, force: true }); }
     } },
 ];
-export const _test = { download, probe, parseExt: (u) => (MEDIA_EXT.exec(u) || [])[1] || null, splitIntoParts, sendAudioParts };
+export const _test = { download, probe, parseExt: (u) => (MEDIA_EXT.exec(u) || [])[1] || null, splitIntoParts, sendAudioParts, videoInfo, fmtDate, durText };
