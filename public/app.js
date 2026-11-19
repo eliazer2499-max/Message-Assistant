@@ -392,13 +392,13 @@ async function loadGoogle() {
     $('#gEnabled').checked = google_enabled !== false;
     $('#gRedirect').textContent = g.redirect_uri; $('#gId').value = g.client_id || '';
     $('#gSecret').placeholder = g.has_secret ? '(saved — paste a new one to change)' : 'paste the Client secret';
-    $('#gState').textContent = g.ready ? `On ✓ · ${g.connected} Google account${g.connected === 1 ? '' : 's'} connected` : 'Off — add a Client ID and secret';
+    $('#gState').textContent = g.ready ? `Key saved ✓ · ${g.connected} Google account${g.connected === 1 ? '' : 's'} connected` : 'No key yet — paste the Client ID and secret below';
     $('#gState').className = 'state ' + (g.ready ? 'ok' : 'muted');
     $('#gHttps').textContent = g.https ? '' : 'Note: Google only accepts a redirect address that starts with https:// (your dashboard address). Open the dashboard through its https address so this matches.';
   } catch {}
 }
 $('#gEnabled').onchange = async () => {
-  try { await POST('/api/settings', { settings: { google_connect_enabled: $('#gEnabled').checked ? '1' : '0' } }); $('#gMsg').textContent = $('#gEnabled').checked ? 'Google connect: on.' : 'Google connect: off — the Google card leaves people’s pages.'; $('#gMsg').className = 'msg ok'; }
+  try { await POST('/api/settings', { google_connect_enabled: $('#gEnabled').checked ? '1' : '0' }); $('#gMsg').textContent = $('#gEnabled').checked ? 'Google connect: on.' : 'Google connect: off — the Google card leaves people’s pages.'; $('#gMsg').className = 'msg ok'; }
   catch (er) { $('#gMsg').textContent = er.message; $('#gMsg').className = 'msg err'; }
 };
 $('#gSave').onclick = async () => {
@@ -514,6 +514,6 @@ $('#pwSave').onclick = async () => {
   catch { showLogin(); }
 })();
 $('#ownAiKeys').onchange = async () => {
-  try { await POST('/api/settings', { settings: { allow_own_ai_keys: $('#ownAiKeys').checked ? '1' : '0' } }); }
+  try { await POST('/api/settings', { allow_own_ai_keys: $('#ownAiKeys').checked ? '1' : '0' }); }
   catch (er) { alert(er.message); loadKeys(); }
 };

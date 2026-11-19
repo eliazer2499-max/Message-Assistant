@@ -155,7 +155,11 @@
       </div>
       <div class="card" id="googleCard">
         <h2>Connect accounts (Google)</h2>
-        <p class="muted small">Lets each person connect their own Google account on their page, so the assistant can read their Gmail, Calendar and Drive for them (read only). Free: you make your own Google “OAuth client” once.</p>
+        <p class="muted small">The master switch for Google connect. <b>You do not connect your own account here</b> — each person connects <b>their own</b> Google account on their page, so the assistant can read their Gmail, Calendar and Drive for them (read only).</p>
+        <label class="check"><input type="checkbox" id="gEnabled"> Google connect is available to people</label>
+        <p class="muted small">Turn this off and the Google card leaves everyone's page entirely. The switch saves the moment you flip it — there is nothing else to press.</p>
+        <h3>The one-time Google key</h3>
+        <p class="muted small">Google will not let people connect at all until the app itself has a key (an “OAuth client”, free, made once in Google Cloud). It is <b>not</b> an account and not a password — it is the app's ID card. Paste it once, below, and the switch above can do its work.</p>
         <p id="gState" class="state"></p>
         <details class="help"><summary>How to get the Client ID and secret (about 10 minutes)</summary>
           <ol class="steps">
@@ -170,10 +174,8 @@
         </details>
         <label>Client ID<input id="gId" placeholder="1234-abc.apps.googleusercontent.com" autocomplete="off"></label>
         <label>Client secret<input id="gSecret" type="password" placeholder="(saved — paste a new one to change)" autocomplete="off"></label>
-        <div class="row"><button class="primary" id="gSave">Save</button></div>
+        <div class="row"><button class="primary" id="gSave">Save the key</button></div>
         <p id="gMsg" class="msg"></p>
-        <label class="check"><input type="checkbox" id="gEnabled"> Google connect is available to people</label>
-        <p class="muted small">Each person connects <b>their own</b> Google account on their page (with the system client above). Turn this off and the Google card leaves their page entirely.</p>
       </div>
       <div class="card" id="speedCard">
         <h2>Speed</h2>

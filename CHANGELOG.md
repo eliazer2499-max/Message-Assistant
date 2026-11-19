@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.8 — 2026-11-18
+- **The Google connect switch actually saves now.** Flipping "Google connect is available to people" showed a green "on" — and stored nothing, so the next visit it was back where it started. The switch was sending its save in a shape the server silently ignored. The server now accepts both shapes, the switch saves the moment it is flipped, and the same silent bug is fixed in the "People may use their own AI keys" switch, which had it too.
+- **The admin Google card explains itself.** The switch now sits at the top of the card, and the Client ID / secret are labeled for what they are — the app's one-time Google key, not an account: the admin connects nothing here; each person connects their own Google account on their own page.
+
 ## 1.1.7 — 2026-11-18
 - **Never silence.** When a picture or voice note could not be sent, the person who asked for it heard nothing — it looked exactly like being ignored (only the dashboard was told). Now a file gets 3 tries, and if it still cannot go through, the person gets a plain text saying so and inviting them to ask again. At most one such note per person per 10 minutes.
 - **One attach attempt is capped at about 90 seconds.** The Messages page is shared by everyone; a hopeless attach could sit on it for minutes, holding up other people's texts and new messages behind it. Now it gives up, names the step that failed, and frees the page.
