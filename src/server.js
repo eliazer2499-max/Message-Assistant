@@ -126,6 +126,10 @@ on('POST', /^\/api\/keys\/(\d+)\/wake$/, async (req, { m }) => ({ key: aikeys.wa
 // ---------- settings ----------
 on('GET', /^\/api\/settings$/, async () => { const s = allSettings(); const o = {}; for (const k of EDITABLE) o[k] = s[k]; return { settings: o, portal_url: cfg.publicUrl + '/me', admin_phones: users.adminPhones(), admin_username: setting('admin_username') }; });
 on('POST', /^\/api\/settings$/, async (req, { b }) => {
+  // 1.1.8: the on/off toggles (Google connect, own AI keys) post { settings: { … } } — the shape GET returns.
+  // This handler only ever read flat keys, so a toggle showed "on/off" in green and saved NOTHING; on the
+  // next visit it was back where it started ("I toggle it on and it's not getting saved"). Accept both shapes.
+  if (b.settings && typeof b.settings === 'object') for (const k of Object.keys(b.settings)) if (b[k] === undefined) b[k] = b.settings[k];
   for (const k of EDITABLE) if (b[k] !== undefined) {
     let v = String(b[k] ?? '').slice(0, 2000);
     if (k === 'alert_webhook' && v && !/^https:\/\/[^\s]+$/.test(v)) throw Object.assign(new Error('The alert address must start with https://'), { status: 400 });
