@@ -64,6 +64,8 @@ export function openDb(file) {
   add('users', 'access_until', 'INTEGER'); add('users', 'expired_notice_sent', 'INTEGER DEFAULT 0');
   // 1.0.8: speed — where each reply's time went
   add('jobs', 'timing', 'TEXT');
+  // 1.1.11: media the person sent WITH their message (voice note / picture / file): JSON [{token, kind, name, mime}] into the media store
+  add('jobs', 'media', 'TEXT');
   // 1.0.8: connected accounts (Google…), per person; tokens are sealed in secrets (like the AI keys)
   db.exec(`CREATE TABLE IF NOT EXISTS connections (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, provider TEXT NOT NULL, account TEXT, scopes TEXT,
     status TEXT DEFAULT 'connected', created INTEGER, updated INTEGER, last_used INTEGER, error TEXT, UNIQUE(user_id, provider, account))`);

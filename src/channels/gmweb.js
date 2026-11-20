@@ -41,6 +41,8 @@ export const SELECTORS = {
   convUnread: '[data-e2e-is-unread="true"], .unread, [aria-label*="Unread" i]',
   message: 'mws-message-wrapper',
   messageText: '.text-msg-content, [data-e2e-text-message-content], mws-text-message-part, .text-msg',
+  // 1.1.11: media inside a message (a picture, a voice note, a video, a file) — what the person sent TO the assistant
+  messageMedia: 'img, video, audio, [data-e2e-attachment], a[download]',
   messageIdAttr: 'msg-id',
   outgoingAttr: 'is-outgoing',
   // 1.0.7: Google's typing box is now a contenteditable div (older pages: a textarea) — both are found
@@ -177,7 +179,7 @@ export function staleCutoff({ startedAt, prevAlive = 0, staleMs = 600000, maxBac
   const since = prevAlive > 0 ? Math.min(startedAt, prevAlive) : startedAt;
   return Math.max(since, startedAt - maxBackMs) - staleMs;
 }
-const PRIO = { send: 0, input: 1, screen: 2, health: 3, poll: 4 };
+const PRIO = { send: 0, sendMedia: 1, input: 2, screen: 3, health: 4, poll: 5 };   // 1.1.10: a plain-text answer (send) goes before a picture/file send (sendMedia) — a stuck attach must not make the assistant look deaf
 
 export function loadSelectors(dataDir = cfg.dataDir) {
   try { const o = JSON.parse(fs.readFileSync(path.join(dataDir, 'gm-selectors.json'), 'utf8')); return { ...SELECTORS, ...o }; } catch { return { ...SELECTORS }; }
@@ -267,11 +269,31 @@ function snapshotScript(sel) {
     if (/^tmp|^pending/i.test(id) || /sending|pending|queued|waiting to send|\bclock\b/.test(all) || icons.some(t => /^(schedule|access_time|pending|hourglass_empty|hourglass_top|watch_later)$/.test(t))) return 'pending';
     return '';
   }
+  // 1.1.11: does this message carry media, and what kind? (emoji and avatars don't count)
+  const mediaOf = (w, te) => {
+    for (const e of qa(w, sel.messageMedia)) {
+      if (te && (e === te || te.contains(e))) continue;
+      const tag = e.tagName.toLowerCase();
+      if (tag === 'audio') return 'audio';
+      if (tag === 'video') return 'video';
+      if (tag === 'img') {
+        if (/avatar|profile|emoji/i.test((e.getAttribute('alt') || '') + ' ' + (e.className || ''))) continue;
+        const r = e.getBoundingClientRect();
+        if (r.width >= 40 && r.height >= 40) return 'image';
+        continue;
+      }
+      const lab = ((e.getAttribute && e.getAttribute('aria-label') || '') + ' ' + (e.className || '')).toLowerCase();
+      if (/audio|voice/.test(lab)) return 'audio';
+      if (/video/.test(lab)) return 'video';
+      return 'file';
+    }
+    return null;
+  };
   const msgs = qa(document, sel.message).slice(-40).map((w, i) => {
     const out = w.getAttribute(sel.outgoingAttr);
     const textEl = q(w, sel.messageText);
     const outgoing = out === 'true' || (out === null && /outgoing/.test(w.className || ''));
-    return { id: w.getAttribute(sel.messageIdAttr) || '', outgoing, text: textEl ? (textEl.innerText || textEl.textContent || '').trim() : '', status: outgoing ? sendStatus(w) : '' };
+    return { id: w.getAttribute(sel.messageIdAttr) || '', outgoing, text: textEl ? (textEl.innerText || textEl.textContent || '').trim() : '', media: outgoing ? null : mediaOf(w, textEl), status: outgoing ? sendStatus(w) : '' };
   });
   const cur = /\/conversations\/([^/?#]+)/.exec(location.pathname);
   return { url: location.href, title: document.title, body: (document.body ? document.body.innerText : '').slice(0, 3000), convs, msgs,
@@ -732,16 +754,84 @@ export class GoogleMessagesWeb extends EventEmitter {
     for (const n of fresh) {
       const m = s.msgs[n];
       this.opts.markSeen?.(keys[n]);
-      if (!m.text) continue;                     // pictures / stickers: not handled in 1.0
-      this.emit('message', { convId: v.id, phone: v.name, name: v.name, text: m.text, extId: keys[n], ts: Date.now() });
+      if (!m.text && !m.media) continue;                     // nothing in it (a reaction, an empty shell)
+      await this.emitIncoming(v.id, v.name, m, n, keys[n]);
     }
     // leave the chat (so the next incoming message shows as unread in the list)
     await this.page.goto(this.url + '/conversations', { waitUntil: 'domcontentloaded' }).catch(() => {});
   }
 
+  /** 1.1.11: emit one fresh incoming message. A voice note / picture / video / file is downloaded NOW,
+   *  while this chat is open, so the assistant hears/sees it like the person does; if it can't be fetched,
+   *  the message still goes through with mediaFailed, so the person is told honestly instead of ignored. */
+  async emitIncoming(convId, name, m, idx, extId) {
+    let media = null, mediaFailed = null;
+    if (m.media) {
+      const got = await this.fetchIncomingMedia(idx, m.media).catch(() => null);
+      if (got) media = [got]; else mediaFailed = m.media;
+    }
+    this.emit('message', { convId, phone: name, name, text: m.text, media, mediaFailed, extId, ts: Date.now() });
+  }
+
+  /** 1.1.11: fetch the bytes of the media in the idx-th message of the open chat. First the element's own
+   *  address, fetched inside the page (blob: and Google-hosted addresses both work there); if the element
+   *  has no address, click it and take the browser download its viewer offers. Returns
+   *  { kind, name, mime, data(base64) } or null. Best-effort by design: the caller tells the person when it fails. */
+  async fetchIncomingMedia(idx, kind) {
+    const cap = 26 * 1024 * 1024;
+    const got = await this.page.evaluate(async ({ idx, sel }) => {
+      const qa = (root, s) => { try { return [...root.querySelectorAll(s)]; } catch { return []; } };
+      const q = (root, s) => { try { return root.querySelector(s); } catch { return null; } };
+      const w = qa(document, sel.message).slice(-40)[idx]; if (!w) return null;
+      const te = q(w, sel.messageText);
+      const els = qa(w, sel.messageMedia).filter(e => !te || (e !== te && !te.contains(e)));
+      const el = els.find(e => ['IMG', 'VIDEO', 'AUDIO'].includes(e.tagName)) || els[0];
+      if (!el) return null;
+      const src = el.currentSrc || el.getAttribute('src') || (el.querySelector && el.querySelector('source')?.getAttribute('src')) || '';
+      if (!src) return { needsClick: true };
+      try {
+        const r = await fetch(src); if (!r.ok) return null;
+        const buf = await r.arrayBuffer();
+        if (!buf.byteLength || buf.byteLength > 26 * 1024 * 1024) return null;
+        let bin = ''; const bytes = new Uint8Array(buf);
+        for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        return { data: btoa(bin), mime: r.headers.get('content-type') || '', srcName: decodeURIComponent(src.split('/').pop().split('?')[0] || '') };
+      } catch { return null; }
+    }, { idx, sel: this.sel }).catch(() => null);
+    const EXT_OF_MIME = { 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/webm': 'webm', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm', 'application/pdf': 'pdf' };
+    const shape = (data, mime, name) => {
+      const ext = EXT_OF_MIME[mime] || (name && /\.([\p{L}\d]{1,8})$/u.exec(name)?.[1]) || '';
+      const base = name && /[.\p{L}\d]/u.test(name) ? name : ({ audio: 'voice-note', image: 'photo', video: 'video', pdf: 'document', file: 'file' }[kind] || 'file');
+      return { kind, name: ext && !base.toLowerCase().endsWith('.' + ext.toLowerCase()) ? base + '.' + ext : base, mime: mime || '', data };
+    };
+    if (got && got.data) return shape(got.data, String(got.mime || '').split(';')[0].trim(), got.srcName || '');
+    // no direct address (or it failed): click the media and take the download the viewer offers
+    try {
+      const dlP = this.page.waitForEvent('download', { timeout: 15000 }).catch(() => null);
+      await this.page.evaluate(({ idx, sel }) => {
+        const qa = (root, s) => { try { return [...root.querySelectorAll(s)]; } catch { return []; } };
+        const q = (root, s) => { try { return root.querySelector(s); } catch { return null; } };
+        const w = qa(document, sel.message).slice(-40)[idx]; if (!w) return;
+        const te = q(w, sel.messageText);
+        const el = qa(w, sel.messageMedia).filter(e => !te || (e !== te && !te.contains(e)))[0];
+        if (el) el.click();
+      }, { idx, sel: this.sel });
+      const btn = this.page.locator('[aria-label*="Download" i], [data-e2e-download], button:has-text("Download")').first();
+      if (await btn.count().catch(() => 0)) await btn.click({ timeout: 5000 }).catch(() => {});
+      const dl = await dlP;
+      if (!dl) { await this.page.keyboard.press('Escape').catch(() => {}); return null; }
+      const p = await dl.path().catch(() => null);
+      await this.page.keyboard.press('Escape').catch(() => {});
+      if (!p) return null;
+      const buf = fs.readFileSync(p);
+      if (!buf.length || buf.length > cap) return null;
+      return shape(buf.toString('base64'), '', dl.suggestedFilename() || '');
+    } catch { return null; }
+  }
+
   // ---------- sending ----------
   send({ convId = null, phone = null, text, media = null, mediaUrl = null, skipParts = 0 }) {
-    return this.enqueue('send', async () => {
+    return this.enqueue(media ? 'sendMedia' : 'send', async () => {
       if (this.state !== 'connected') { const e = new Error('Messages is not connected (' + this.state + ')'); e.notConnected = true; throw e; }
       let id = convId;
       if (!id) id = await this.newChat(phone);
@@ -767,11 +857,12 @@ export class GoogleMessagesWeb extends EventEmitter {
       // texts that came in while this chat was open (Google marks them read, so the list won't show them as new)
       const s = await this.snap();
       const keys = messageKeys(id, s.msgs), known = this.opened.has(id);
-      s.msgs.forEach((m, n) => {
-        const fresh = known && !m.outgoing && m.text && !this.opts.isSeen?.(keys[n]);
+      for (let n = 0; n < s.msgs.length; n++) {
+        const m = s.msgs[n];
+        const fresh = known && !m.outgoing && (m.text || m.media) && !this.opts.isSeen?.(keys[n]);
         this.opts.markSeen?.(keys[n]);
-        if (fresh) this.emit('message', { convId: id, phone: this.names?.get(id) || phone || '', name: this.names?.get(id) || '', text: m.text, extId: keys[n], ts: Date.now() });
-      });
+        if (fresh) await this.emitIncoming(id, this.names?.get(id) || phone || '', m, n, keys[n]);
+      }
       this.opened.add(id);
       const sig = s.convs.find(c => c.id === id); if (sig) this.sigs.set(id, sig.snippet + '|' + sig.time);
       await this.page.goto(this.url + '/conversations', { waitUntil: 'domcontentloaded' }).catch(() => {});

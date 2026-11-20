@@ -267,10 +267,20 @@ function serveStatic(req, res, p) {
   return true;
 }
 
+let BOOTED = false;   // 1.1.9: main() opens the port BEFORE startApp runs (see main), so the first seconds answer "starting" instead of nothing
 export function handler() {
   return async (req, res) => {
     const url = new URL(req.url, 'http://x');
     try {
+      if (!BOOTED) {
+        // 1.1.9: while the app is still starting (the Messages browser launch is the slow part), the port is
+        // already open: /healthz answers, the dashboard page itself loads, and data calls get a clean
+        // "starting" they can retry — instead of the Bad Gateway the proxy showed for the whole launch,
+        // on every restart and every update, forever if the launch hung.
+        if (url.pathname === '/healthz') return send(res, 200, { ok: true, starting: true, product: PRODUCT, version: VERSION });
+        if (req.method === 'GET' && !url.pathname.startsWith('/api/') && !url.pathname.startsWith('/oauth/') && !/^\/(sites|preview|m)(\/|$)/.test(url.pathname)) { if (serveStatic(req, res, url.pathname)) return; }
+        return send(res, 503, { error: 'starting' }, { 'Retry-After': '2' });
+      }
       if (/^\/(sites|preview|m)(\/|$)/.test(url.pathname)) {
         if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain' }); return res.end('Method not allowed'); }
         if (serveSitesPaths(req, res, url)) return;
@@ -308,10 +318,11 @@ export function handler() {
 }
 
 export async function main({ channel = null, port = cfg.port, host = cfg.host } = {}) {
-  const app = await startApp({ channel });
-  CH = app.channel;
   const srv = http.createServer(handler());
-  await new Promise(r => srv.listen(port, host, r));
+  await new Promise(r => srv.listen(port, host, r));   // 1.1.9: listen first — see the BOOTED guard in handler()
+  let app;
+  try { app = await startApp({ channel }); } catch (e) { srv.close(); throw e; }
+  CH = app.channel; BOOTED = true;
   log('http', `${PRODUCT} ${VERSION} listening on ${host}:${srv.address().port}`);
   const stop = async () => { srv.close(); await app.stop(); await B.shutdown(); };
   return { server: srv, port: srv.address().port, channel: CH, stop };

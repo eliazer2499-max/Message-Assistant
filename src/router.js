@@ -10,6 +10,13 @@ import { enqueueJob } from './agent.js';
 import { alert } from './alerts.js';
 import { PRODUCT } from './config.js';
 import { handleUserText as siteDecision } from './siteflow.js';
+import * as S from './sites.js';
+
+// 1.1.11: incoming media (a voice note / picture / video / file sent TO the assistant)
+const KIND_LABEL = { audio: '[Voice note]', image: '[Photo]', video: '[Video]', pdf: '[PDF file]', file: '[File]' };
+const KIND_WORD = { audio: 'voice note', image: 'picture', video: 'video', pdf: 'PDF file', file: 'file' };
+const EXT_OF_MIME = { 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/ogg': 'ogg', 'audio/wav': 'wav', 'audio/webm': 'webm', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm', 'application/pdf': 'pdf' };
+const couldNotOpen = (kind) => `\n[The person sent a ${KIND_WORD[kind] || 'file'}, but it could not be opened on this side. Tell them plainly that you could not open it, and ask them to type what it says or send it again.]`;
 
 const HELP = (name) => `${name} tips:\n• Ask anything: "what time does Costco close?", "summarize this link …"\n• Tasks on the web: "check the price of … on …"\n• Reminders: "remind me at 6pm to call mom"\n• NOTES = what I remember about you\n• FORGET ALL = delete those notes\n• RESET = start a fresh conversation\n• STOP = pause me, START = turn me back on`;
 
@@ -26,26 +33,31 @@ export function approveAndWelcome(id, actor = 'admin') {
 
 export async function handleIncoming(m) {
   const text = String(m.text || '').trim();
-  if (!text) return { action: 'empty' };
+  // 1.1.11: a message can be ONLY media (a voice note, a picture) — it is not "empty"
+  const media = Array.isArray(m.media) ? m.media.filter(x => x && x.data && x.kind) : [];
+  if (!text && !media.length && !m.mediaFailed) return { action: 'empty' };
   if (m.extId && !seenOnce('in:' + m.extId)) return { action: 'duplicate' };
+  const shownText = text || KIND_LABEL[media[0]?.kind || m.mediaFailed] || '[File]';   // what history / the waiting reply call this message
   const phone = normalizePhone(m.phone) || normalizePhone(m.name);
   const admin = phone && isAdminPhone(phone);
   if (admin) {
     const ex = userByPhone(phone);
-    if (!ex) { arrive({ phone, convId: m.convId, name: 'Admin', text }); }
+    if (!ex) { arrive({ phone, convId: m.convId, name: 'Admin', text: shownText }); }
     const u0 = userByPhone(phone);
     if (u0 && u0.status !== 'approved') approve(u0.id, 'system');
-    // 1.0.2: YES / NO for a site waiting for the admin (or the admin's own publish question)
-    const ua = userByPhone(phone);
-    if (ua && await siteDecision(ua, text, { isAdmin: true })) { arrive({ phone, convId: m.convId, name: m.name, text }); return { action: 'site_decision' }; }
-    const cmd = adminCommand(text);
-    if (cmd) { arrive({ phone, convId: m.convId, name: m.name, text }); enqueueText({ userId: userByPhone(phone).id, text: cmd, kind: 'admin' }); return { action: 'admin_command' }; }
+    if (text) {
+      // 1.0.2: YES / NO for a site waiting for the admin (or the admin's own publish question)
+      const ua = userByPhone(phone);
+      if (ua && await siteDecision(ua, text, { isAdmin: true })) { arrive({ phone, convId: m.convId, name: m.name, text }); return { action: 'site_decision' }; }
+      const cmd = adminCommand(text);
+      if (cmd) { arrive({ phone, convId: m.convId, name: m.name, text }); enqueueText({ userId: userByPhone(phone).id, text: cmd, kind: 'admin' }); return { action: 'admin_command' }; }
+    }
   }
-  const { user, action, isNew } = arrive({ phone, convId: m.convId, name: m.name, text });
+  const { user, action, isNew } = arrive({ phone, convId: m.convId, name: m.name, text: shownText });
   if (!user) return { action: 'ignored' };
   if (action === 'wait') {
     enqueueText({ userId: user.id, text: setting('waiting_text'), kind: 'waiting' });
-    alert('info', `New person waiting for approval: ${publicUser(user).label} (#${user.id}). First message: "${text.slice(0, 120)}". Approve in the dashboard, or reply APPROVE ${user.id} / BLOCK ${user.id}.`, { key: 'new-user-' + user.id });
+    alert('info', `New person waiting for approval: ${publicUser(user).label} (#${user.id}). First message: "${shownText.slice(0, 120)}". Approve in the dashboard, or reply APPROVE ${user.id} / BLOCK ${user.id}.`, { key: 'new-user-' + user.id });
     return { action, user };
   }
   if (action !== 'run') return { action, user };
@@ -64,7 +76,7 @@ export async function handleIncoming(m) {
   if (word === 'STOP' || word === 'PAUSE') { run('UPDATE users SET paused=1 WHERE id=?', user.id); enqueueText({ userId: user.id, text: 'Paused. I won\'t answer until you text START.', kind: 'notice' }); return { action: 'paused', user }; }
   if (word === 'START' || word === 'UNPAUSE') { run('UPDATE users SET paused=0 WHERE id=?', user.id); enqueueText({ userId: user.id, text: 'I\'m back on. Ask me anything!', kind: 'notice' }); return { action: 'started', user }; }
   if (user.paused) return { action: 'paused_quiet', user };
-  if (await siteDecision(user, text)) return { action: 'site_decision', user };      // 1.0.2: the one YES for a publish
+  if (text && await siteDecision(user, text)) return { action: 'site_decision', user };      // 1.0.2: the one YES for a publish
   if (word === 'HELP' || word === 'MENU') { enqueueText({ userId: user.id, text: HELP(setting('assistant_name') || PRODUCT), kind: 'notice' }); return { action: 'help', user }; }
   if (word === 'RESET' || word === 'NEW CHAT') { clearHistory(user.id); enqueueText({ userId: user.id, text: 'Fresh start. Your notes and reminders are kept (text NOTES to see them).', kind: 'notice' }); return { action: 'reset', user }; }
   if (word === 'NOTES' || word === 'MEMORY') {
@@ -82,8 +94,23 @@ export async function handleIncoming(m) {
     if (used === lim + 1) enqueueText({ userId: user.id, text: `You've reached today's limit of ${lim} messages. It resets at midnight.`, kind: 'notice' });
     return { action: 'limit', user };
   }
-  addMessage(user.id, 'user', text, m.extId || null);
-  const jobId = enqueueJob(user.id, text);
+  addMessage(user.id, 'user', shownText, m.extId || null);
+  // 1.1.11: keep the media in the media store; the job carries tokens, the agent loads the bytes for the AI
+  let jobText = shownText, jobMedia = null;
+  if (media.length) {
+    jobMedia = [];
+    for (const mm of media.slice(0, 4)) {
+      try {
+        const buf = Buffer.from(mm.data, 'base64');
+        if (!buf.length || buf.length > 26 * 1024 * 1024) continue;
+        const ext = (mm.name && /\.([\p{L}\d]{1,8})$/u.exec(mm.name)?.[1]) || EXT_OF_MIME[mm.mime] || 'bin';
+        const saved = S.saveMedia(buf, { userId: user.id, ext, name: mm.name || ('attachment.' + ext) });
+        jobMedia.push({ token: saved.token, kind: mm.kind, name: mm.name || 'attachment', mime: mm.mime || '' });
+      } catch {}
+    }
+    if (!jobMedia.length) { jobMedia = null; jobText = shownText + couldNotOpen(media[0].kind); }
+  } else if (m.mediaFailed) jobText = shownText + couldNotOpen(m.mediaFailed);
+  const jobId = enqueueJob(user.id, jobText, jobMedia);
   return { action: 'run', user, jobId };
 }
 

@@ -278,7 +278,31 @@ TOOLS.push(...MEDIA_TOOLS);    // 1.1.1: extract audio from a video, media info 
 // 1.1.4: the secure vault — names only for the brain; browser_login fills the password in server-side.
 TOOLS.push(
   { name: 'vault_list', description: 'List what THIS person keeps in their secure vault (their own page → Secure vault): logins, API tokens and secrets for any accounts (e.g. Cloudflare). You see labels only — never the secrets themselves.', params: {},
-    run: async (a, ctx) => ({ entries: VAULT.listEntries(ctx.userId).map(e => ({ id: e.id, label: e.label, kind: e.kind, ...(e.site ? { site: e.site } : {}), ...(e.username ? { username: e.username } : {}) })), note: 'To sign into a site, use browser_login with the entry label. Tokens/secrets cannot be read out — if a task needs one typed somewhere public, explain the vault keeps it sealed.' }) },
+    run: async (a, ctx) => ({ entries: VAULT.listEntries(ctx.userId).map(e => ({ id: e.id, label: e.label, kind: e.kind, ...(e.site ? { site: e.site } : {}), ...(e.username ? { username: e.username } : {}) })), note: 'To sign into a site, use browser_login with the entry label. To use an API token (e.g. their GitHub token), use vault_api with the entry label and the API address. Tokens/secrets cannot be read out — if a task needs one typed somewhere public, explain the vault keeps it sealed.' }) },
+  // 1.1.12: use a saved token against a service's API — the server attaches it; the brain never sees it.
+  { name: 'vault_api', description: 'Call a web API using a TOKEN (or login) from this person\u2019s secure vault (see vault_list) — for example their GitHub token against https://api.github.com/user/repos lists their own repositories, and /search/repositories?q=... searches. The server attaches the secret as the Authorization header; you never see it, and it is theirs alone. auth "bearer" (default) suits API tokens; "basic" suits a username+password entry. Before a call that changes or deletes something, make sure the person asked for exactly that.',
+    params: { entry: S('Vault entry label or id, e.g. "GitHub"'), url: S('The full API address, e.g. https://api.github.com/user/repos'), method: S('GET (default), POST, PUT, PATCH or DELETE'), body: S('Optional: a JSON body for POST/PUT/PATCH, as one JSON string'), auth: S('"bearer" (default) or "basic"') }, required: ['entry', 'url'],
+    run: async ({ entry, url, method, body, auth }, ctx) => {
+      const e = VAULT.findEntry(ctx.userId, entry);
+      if (!e) return { error: 'No vault entry matches that. Call vault_list to see what this person saved.' };
+      const secret = VAULT.secretOf(e.id);
+      if (!secret) return { error: `"${e.label}" has no secret saved. Ask the person to save it again on their page.` };
+      let u; try { u = await B.assertPublicUrl(B.cleanUrl(url)); } catch (err) { return { error: 'That address cannot be called: ' + String(err.message || err).slice(0, 200) }; }
+      const meth = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(String(method || 'GET').toUpperCase()) ? String(method || 'GET').toUpperCase() : 'GET';
+      const headers = { 'Accept': 'application/json', 'User-Agent': 'Message-Assistant' };
+      headers.Authorization = auth === 'basic' ? 'Basic ' + Buffer.from(String(e.username || '') + ':' + secret).toString('base64') : 'Bearer ' + secret;
+      let payload;
+      if (body && meth !== 'GET') { payload = String(body); headers['Content-Type'] = 'application/json'; }
+      try {
+        const r = await fetch(u, { method: meth, headers, body: payload, signal: AbortSignal.timeout(30000), redirect: 'manual' });
+        let text = await r.text();
+        if (text.includes(secret)) text = text.split(secret).join('[the saved secret]');
+        let out; try { out = JSON.parse(text); } catch { out = text; }
+        const flat = typeof out === 'string' ? out : JSON.stringify(out);
+        if (flat.length > 6000) out = flat.slice(0, 6000) + '… [cut — the answer was longer; narrow the request]';
+        return { status: r.status, ok: r.ok, body: out, ...((r.status === 401 || r.status === 403) ? { note: 'The service refused the saved key (401/403) — it may be wrong, expired, or missing a permission. Tell the person plainly.' } : {}) };
+      } catch (err) { return { error: 'The API call failed: ' + String(err.message || err).slice(0, 250) }; }
+    } },
   { name: 'browser_login', description: 'Sign into a website for this person using a LOGIN from their secure vault (see vault_list). The username and password are filled in directly by the server — you never see them. Give the entry label (or id); url optional (the entry\'s saved site is used otherwise). If the site then asks for a verification code, ask the person for it and type it with browser_type.',
     params: { entry: S('Vault entry label or id, e.g. "Cloudflare"'), url: S('Optional: the sign-in page address') }, required: ['entry'],
     run: async ({ entry, url }, ctx) => {

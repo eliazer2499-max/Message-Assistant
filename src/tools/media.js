@@ -156,6 +156,20 @@ async function videoInfo(target) {
     url: e.webpage_url || (e.id ? 'https://www.youtube.com/watch?v=' + e.id : target) };
 }
 export const fmtDate = (yyyymmdd) => { const m = /^(\d{4})(\d{2})(\d{2})$/.exec(String(yyyymmdd || '')); if (!m) return ''; try { return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }); } catch { return ''; } };
+/** 1.1.10: does this title actually match what the person asked for? (Abish asked for "Dylan Paige" the
+ *  YouTuber and was confidently offered "Paige Dylan", a different person — the same words, reversed.)
+ *  Strong = the asked words appear in the title in the same order (or as an exact phrase). rank orders
+ *  search results so an in-order match beats a reversed one. */
+const normWords = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').split(/\s+/).filter(Boolean);
+export function scoreMatch(query, title) {
+  const q = normWords(query), t = normWords(title);
+  if (!q.length || !t.length) return { score: 0, strong: false, rank: 0 };
+  const tSet = new Set(t);
+  const score = q.filter(w => tSet.has(w)).length / q.length;
+  let qi = 0; for (const w of t) { if (qi < q.length && w === q[qi]) qi++; }
+  const strong = qi >= q.length || (q.length >= 2 && t.join(' ').includes(q.join(' ')));
+  return { score, strong, rank: (strong ? 2 : 0) + score };
+}
 export const durText = (s) => { if (!s) return ''; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`; };
 /** 1.1.5 (Abish's rule): a VIDEO request searches YouTube; a SONG request searches YouTube Music — unless
  *  the person said otherwise (the model's source argument, or a link, wins over this default). */
@@ -211,7 +225,7 @@ async function youtubeAudio({ query, url, format, source, confirm, pick }, ctx) 
     if (!q) return { error: 'Tell me what to look for (a name or a few words).' };
     if (music) matches = [{ url: 'https://music.youtube.com/search?q=' + encodeURIComponent(q), title: '' }];
     else {
-      try { const found = await searchYoutube(q); if (found.length) matches = found.map(v => ({ url: v.url, title: v.title })); } catch {}
+      try { const found = await searchYoutube(q); if (found.length) { matches = found.map(v => ({ url: v.url, title: v.title })); matches.sort((a, b) => scoreMatch(q, b.title).rank - scoreMatch(q, a.title).rank); } } catch {}
       if (!matches) matches = [{ url: 'ytsearch1:' + q, title: '' }];
     }
   }
@@ -223,10 +237,15 @@ async function youtubeAudio({ query, url, format, source, confirm, pick }, ctx) 
   if (info.url && /^https:/.test(info.url)) matches[pickIdx] = { url: info.url, title: info.title };
   const thumb = await attachThumbnail(ctx, info);
   setPending(ctx, { matches, pick: pickIdx, title: info.title, source: music ? 'YouTube Music' : 'YouTube', fmt, ts: Date.now() });
+  // 1.1.10: a title whose words don't match the ask IN ORDER is not presented as "the one" — it may be a
+  // different person with a similar name. The model must say so and let the person pick from the matches.
+  const uncertain = !pick && !(url && isYoutubeUrl(url)) && !!String(query || '').trim() && !scoreMatch(String(query || ''), info.title).strong;
   return { preview: true, title: info.title, by: info.by, released: fmtDate(info.uploaded), duration: durText(info.duration_seconds), duration_seconds: info.duration_seconds,
-    source: music ? 'YouTube Music' : 'YouTube', thumbnail_attached: thumb,
+    source: music ? 'YouTube Music' : 'YouTube', thumbnail_attached: thumb, ...(uncertain ? { match_uncertain: true } : {}),
     other_matches: matches.slice(0, 4).map((m, i) => (i + 1) + '. ' + (m.title || '(video)')).filter((_, i) => i !== pickIdx),
-    note: 'STOP — nothing was downloaded. The thumbnail picture is attached to your answer. Now tell them: the title, who it is by, the release date and how long it is, and ASK if this is the one they want. When they say yes, call youtube_audio again with confirm:true and the audio will be sent. If they say it is the wrong one, call youtube_audio with pick:2 (or 3…) to show another match, or search again with different words.' };
+    note: uncertain
+      ? 'STOP — nothing was downloaded, and CAREFUL: this title does NOT closely match what they asked for — their key words are missing or in a different order, so it may be a different person or video with a similar name. Present it honestly: say it is the closest you found and it may NOT be the right one, give its details, and list the other matches by number so they can choose. If they name a number, call youtube_audio with pick:<that number> to preview it; if they say none of them, search again with different words. Download only after they say yes to a specific one.'
+      : 'STOP — nothing was downloaded. The thumbnail picture is attached to your answer. Now tell them: the title, who it is by, the release date and how long it is, and ASK if this is the one they want. When they say yes, call youtube_audio again with confirm:true and the audio will be sent. If they say it is the wrong one, call youtube_audio with pick:2 (or 3…) to show another match, or search again with different words.' };
 }
 
 export const MEDIA_TOOLS = [
@@ -257,6 +276,41 @@ export const MEDIA_TOOLS = [
       const dir = workdir(ctx.userId);
       try { const input = await download(url, dir); return await probe(input); }
       finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    } },
+  { name: 'send_web_file', description: 'Send the person a FILE from the web — a PDF, a form, a document, a spreadsheet, a zip — as an attachment to your answer, never a link (they have no internet). Give the direct address of the file itself (ending .pdf, .docx, .zip…). Use it whenever they ask for a file, a PDF, a form, a document, or a copy of something that lives at a web address. Up to 100 MB.',
+    params: { url: S_('The direct web address of the file'), name: S_('File name to send it as (optional — taken from the address when omitted)') }, required: ['url'],
+    run: async ({ url, name }, ctx) => {
+      const CAP = 100 * 1024 * 1024;
+      let u; try { u = await B.assertPublicUrl(B.cleanUrl(url)); } catch (e) { return { error: e.message }; }
+      let r; try { r = await fetch(u, { redirect: 'follow', signal: AbortSignal.timeout(120000), headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36' } }); }
+      catch (e) { return { error: 'That file could not be fetched: ' + errLine(e) }; }
+      if (!r.ok) return { error: 'That address answered ' + r.status + ' — the file could not be fetched.' };
+      const ct = String(r.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      if (ct === 'text/html') return { error: 'That address is a web page, not a file. If the file is linked from that page, open the page with the browser tools and use the file\u2019s own address.' };
+      if (Number(r.headers.get('content-length') || 0) > CAP) return { error: 'That file is too big to send by text (over 100 MB).' };
+      const chunks = []; let total = 0;
+      try {
+        const reader = r.body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          total += value.length;
+          if (total > CAP) { reader.cancel().catch(() => {}); return { error: 'That file is too big to send by text (over 100 MB).' }; }
+          chunks.push(value);
+        }
+      } catch (e) { return { error: 'The download broke off: ' + errLine(e) }; }
+      const buf = Buffer.concat(chunks);
+      if (!buf.length) return { error: 'That address gave an empty file.' };
+      const CT_EXT = { 'application/pdf': 'pdf', 'application/zip': 'zip', 'application/msword': 'doc', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx', 'application/vnd.ms-excel': 'xls', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx', 'application/vnd.ms-powerpoint': 'ppt', 'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx', 'text/plain': 'txt', 'text/csv': 'csv', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'audio/mpeg': 'mp3', 'video/mp4': 'mp4', 'application/json': 'json' };
+      let fname = String(name || '').trim();
+      if (!fname) { const cd = String(r.headers.get('content-disposition') || ''); const cm = /filename\*=(?:UTF-8'')?([^;]+)|filename="([^"]+)"|filename=([^;]+)/i.exec(cd); fname = cm ? decodeURIComponent((cm[1] || cm[2] || cm[3] || '').trim().replace(/^"|"$/g, '')) : ''; }
+      if (!fname) { try { fname = decodeURIComponent(path.basename(new URL(r.url || String(u)).pathname)); } catch {} }
+      fname = String(fname || 'file').replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || 'file';
+      let ext = path.extname(fname).slice(1).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
+      if (!ext) { ext = CT_EXT[ct] || 'bin'; if (ext !== 'bin') fname += '.' + ext; }
+      const media = S.saveMedia(buf, { userId: ctx.userId, ext, name: fname });
+      ctx.files = [...(ctx.files || []), { media, type: ct || 'application/octet-stream' }];
+      return { ok: true, sent_file: fname, size_kb: Math.max(1, Math.round(buf.length / 1024)), note: 'The file itself is attached to your answer — do NOT paste a link. Confirm in one short line what you sent.' };
     } },
 ];
 export const _test = { download, probe, parseExt: (u) => (MEDIA_EXT.exec(u) || [])[1] || null, splitIntoParts, sendAudioParts, videoInfo, fmtDate, durText };
