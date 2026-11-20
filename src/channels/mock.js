@@ -42,7 +42,7 @@ export class MockChannel extends EventEmitter {
     const c = convId || (phone ? this.convFor(phone) : null);
     if (!c) throw new Error('no conversation');
     (this.reactions ||= []).push({ convId: c, phone: phone || '', emoji, ts: Date.now() });
-    return { ok: true, convId: c };
+    return this.reactResult || { ok: true, convId: c };   // tests may set reactResult {ok:false} for the text fallback
   }
   async confirmSent({ convId, text }) {
     this.checks++;

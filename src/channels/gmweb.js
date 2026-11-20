@@ -71,6 +71,7 @@ export const SELECTORS = {
   // the emoji buttons. Google's page can change: if these stop matching, reactions quietly stop (texts never do).
   reactButton: 'button[aria-label*="React" i], [data-e2e-reaction-button], button[aria-label*="emoji" i]',
   reactPicker: '[role="menu"], [role="dialog"], [class*="reaction" i], [class*="emoji" i]',
+  reactionChip: '[data-e2e-reaction], [class*="reaction" i]',
 };
 export const TEXTS = {
   otherTab: /(open|opened|active) in (another|a different|other) (window|tab|browser)|use (messages )?here/i,
@@ -179,7 +180,7 @@ export function staleCutoff({ startedAt, prevAlive = 0, staleMs = 600000, maxBac
   const since = prevAlive > 0 ? Math.min(startedAt, prevAlive) : startedAt;
   return Math.max(since, startedAt - maxBackMs) - staleMs;
 }
-const PRIO = { send: 0, sendMedia: 1, input: 2, screen: 3, health: 4, poll: 5 };   // 1.1.10: a plain-text answer (send) goes before a picture/file send (sendMedia) — a stuck attach must not make the assistant look deaf
+const PRIO = { send: 0, sendMedia: 1, react: 2, input: 3, screen: 4, health: 5, poll: 6 };   // 1.1.10: a plain-text answer (send) goes before a picture/file send (sendMedia) — a stuck attach must not make the assistant look deaf; 1.1.14: reactions sit below both sends
 
 export function loadSelectors(dataDir = cfg.dataDir) {
   try { const o = JSON.parse(fs.readFileSync(path.join(dataDir, 'gm-selectors.json'), 'utf8')); return { ...SELECTORS, ...o }; } catch { return { ...SELECTORS }; }
@@ -289,11 +290,12 @@ function snapshotScript(sel) {
     }
     return null;
   };
+  const reactionOf = (w) => { const c = q(w, sel.reactionChip || '[data-e2e-reaction]'); const t = c ? (c.textContent || '').trim() : ''; return t && t.length <= 4 ? t : null; };
   const msgs = qa(document, sel.message).slice(-40).map((w, i) => {
     const out = w.getAttribute(sel.outgoingAttr);
     const textEl = q(w, sel.messageText);
     const outgoing = out === 'true' || (out === null && /outgoing/.test(w.className || ''));
-    return { id: w.getAttribute(sel.messageIdAttr) || '', outgoing, text: textEl ? (textEl.innerText || textEl.textContent || '').trim() : '', media: outgoing ? null : mediaOf(w, textEl), status: outgoing ? sendStatus(w) : '' };
+    return { id: w.getAttribute(sel.messageIdAttr) || '', outgoing, text: textEl ? (textEl.innerText || textEl.textContent || '').trim() : '', media: outgoing ? null : mediaOf(w, textEl), reaction: reactionOf(w), status: outgoing ? sendStatus(w) : '' };
   });
   const cur = /\/conversations\/([^/?#]+)/.exec(location.pathname);
   return { url: location.href, title: document.title, body: (document.body ? document.body.innerText : '').slice(0, 3000), convs, msgs,
@@ -1014,26 +1016,34 @@ export class GoogleMessagesWeb extends EventEmitter {
     }
     throw new Error('the file was staged [' + notes.join('; ') + '] but did not appear as sent');
   }
-  /** 1.1.4: react to the person's newest incoming message in this chat (RCS reaction on their bubble).
-   *  Best effort by design: if Google's hover/picker UI does not match, this throws and the caller drops it —
-   *  a missed reaction must never hold up a text. */
+  /** 1.1.4 → 1.1.14: react to the person's newest incoming message in this chat. RCS chats get the real
+   *  reaction, VERIFIED on the page afterwards; anything else (an SMS chat, a missing picker, a reaction
+   *  that did not land) returns { ok:false, reason } and the outbox sends the emoji as a tiny text instead —
+   *  FLS's choice: a reaction on ANY message. Throws only when Messages itself is down (notConnected),
+   *  so the outbox can retry later; a missed reaction must never hold up a text. */
   react({ convId = null, phone = null, emoji }) {
-    return this.enqueue('send', async () => {
+    return this.enqueue('react', async () => {
       if (this.state !== 'connected') { const e = new Error('Messages is not connected (' + this.state + ')'); e.notConnected = true; throw e; }
       let id = convId;
       if (!id) id = await this.newChat(phone);
       await this.openChat(id);
       const p = this.page;
-      // which of the message bubbles are incoming (the page marks ours with is-outgoing)
-      const kinds = await p.evaluate((sel) => [...document.querySelectorAll(sel.message)].map(w => w.getAttribute(sel.outgoingAttr) === 'true'), this.sel).catch(() => []);
-      let idx = -1; for (let i = kinds.length - 1; i >= 0; i--) if (!kinds[i]) { idx = i; break; }
-      if (idx < 0) throw new Error('no incoming message to react to');
-      const bubble = p.locator(this.sel.message).nth(idx);
-      await bubble.hover({ timeout: 5000 });
+      const finish = async (r) => { await p.goto(this.url + '/conversations', { waitUntil: 'domcontentloaded' }).catch(() => {}); return { convId: id, ...r }; };
+      // 1.1.14: SMS/MMS chats have no reactions in Messages web — the composer names the kind of chat
+      // ("RCS message" vs "Text message"). On an SMS chat don't tap blindly: report no, the emoji goes as a text.
+      const ph = await p.locator(this.sel.composer).first().evaluate(el => el.getAttribute('placeholder') || el.getAttribute('aria-label') || el.getAttribute('data-placeholder') || '').catch(() => '');
+      if (/text message|sms|mms/i.test(ph) && !/rcs/i.test(ph)) return finish({ ok: false, reason: 'SMS chat — no reactions there' });
+      const s = await this.snap().catch(() => null);
+      if (!s) return finish({ ok: false, reason: 'no snapshot' });
+      let si = -1; for (let i = s.msgs.length - 1; i >= 0; i--) if (!s.msgs[i].outgoing) { si = i; break; }
+      if (si < 0) return finish({ ok: false, reason: 'no incoming message to react to' });
+      const total = await p.locator(this.sel.message).count().catch(() => s.msgs.length);
+      const bubble = p.locator(this.sel.message).nth(Math.max(0, total - s.msgs.length + si));
+      await bubble.hover({ timeout: 5000 }).catch(() => {});
       await sleep(this.opts.reactSettleMs ?? 500);
       const reactBtn = p.locator(this.sel.reactButton).first();
-      if (!(await reactBtn.count())) throw new Error('no react button on this page');
-      await reactBtn.click({ timeout: 5000 });
+      if (!(await reactBtn.count().catch(() => 0))) return finish({ ok: false, reason: 'no react button on this page' });
+      await reactBtn.click({ timeout: 5000 }).catch(() => {});
       await sleep(this.opts.reactSettleMs ?? 500);
       // the picker: a button whose label or text IS the emoji; if ours is not offered, 👍 is the honest fallback
       const pick = async (e) => p.evaluate((em) => {
@@ -1042,10 +1052,13 @@ export class GoogleMessagesWeb extends EventEmitter {
         if (hit) { (hit.closest('button, [role="button"], [role="menuitem"]') || hit).click(); return true; }
         return false;
       }, e).catch(() => false);
-      if (!(await pick(emoji)) && emoji !== '👍') await pick('👍');
-      await sleep(300);
-      await p.goto(this.url + '/conversations', { waitUntil: 'domcontentloaded' }).catch(() => {});
-      return { ok: true, convId: id };
+      if (!(await pick(emoji)) && emoji !== '👍') { if (!(await pick('👍'))) return finish({ ok: false, reason: 'emoji not in the picker' }); }
+      await sleep(400);
+      // 1.1.14: VERIFY — the reaction must actually show on their message, or it didn't happen.
+      const s2 = await this.snap().catch(() => null);
+      const m2 = s2 && s2.msgs[si];
+      if (m2 && m2.reaction) return finish({ ok: true });
+      return finish({ ok: false, reason: 'the reaction did not land' });
     });
   }
   /** Wait for the part we just sent: 'sent' (our new bubble, without the clock/Sending… state), 'pending', 'failed' or 'none'. */

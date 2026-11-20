@@ -47,7 +47,9 @@ async function drainReactions() {
     const u = userById(r.userId);
     if (!u) { reactionQueue.shift(); continue; }
     try {
-      await channel.react({ convId: u.conv_id || null, phone: u.phone && !u.phone.startsWith('conv:') ? u.phone : null, emoji: r.emoji });
+      const res = await channel.react({ convId: u.conv_id || null, phone: u.phone && !u.phone.startsWith('conv:') ? u.phone : null, emoji: r.emoji });
+      // 1.1.14: no real reaction on that chat (SMS, or it didn't land) → the emoji goes as a tiny text.
+      if (res && res.ok === false) { enqueueText({ userId: r.userId, text: r.emoji, kind: 'reply' }); log('outbox', `reaction ${r.emoji} for user ${r.userId} went as a text (${res.reason || 'no reaction support'})`); }
       reactionQueue.shift();
     } catch (e) {
       if (e.notConnected) return;                          // Messages is down: try again on the next drain

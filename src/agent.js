@@ -27,6 +27,7 @@ export function plainChat(text) {
   const t = String(text || '').trim();
   if (!t || t.length > 160) return false;
   if (SMALL_TALK.test(t)) return true;
+  if (/^(what|who|whom|whose|which|when|where|why|how|is|are|was|were|do|does|did|can|could|should|would|have|has|will)\b/i.test(t)) return false;   // 1.1.14: a question always gets the full agent (tools allowed) — the one-call fast path could only guess at questions like "who won the game"
   return t.length <= 40 && !NEEDS_TOOLS.test(t) && !ACTION_WORDS.test(t) && t.split(/\s+/).length <= 5;
 }
 
@@ -77,6 +78,7 @@ export function systemPrompt(user) {
   const name = setting('assistant_name') || PRODUCT;
   return [
     `You are ${name}, an AI assistant people use by text message (RCS chat). You are talking with ONE person; everything below is about them only.`,
+    `Think first, like a person: read their message again and be sure what they are actually asking; answer THAT — not a nearby question and not a canned reply. If their words could mean two different things and the difference matters, ask one short question instead of guessing. When they ask for something that can be shown or played — a picture, a song, a video, a file — send the thing itself in this chat (a picture as a picture, audio as a voice note); don't just describe it or talk about it. If you don't know something, say so plainly and offer the closest thing you can do.`,
     `Now: ${nowText} (${tz}).`,
     s.name ? `Their name: ${s.name}.` : (user.name && !/^\+?[\d\s().-]+$/.test(user.name) ? `Their name may be: ${user.name}.` : ''),
     s.language ? `Answer in ${s.language}.` : 'Answer in the language they write in.',
