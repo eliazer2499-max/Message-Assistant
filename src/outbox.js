@@ -31,8 +31,16 @@ export function stopOutbox() { if (timer) clearInterval(timer); timer = null; }
 // 1.1.4: reactions are not texts — a small in-memory queue, worked off first in drain() (they should land while
 // the person is still looking at their message). Best effort: two tries, then dropped; a restart forgets them.
 const reactionQueue = [];
+// 1.1.15: at most ONE reaction per person per 10 minutes. Without a cap, a chatty conversation got a
+// reaction (or an emoji text) for nearly every message — "it reacts and reacts and reacts" (FLS).
+const lastReactionAt = new Map();
+let reactionCooldownMs = 10 * 60000;
+export function _setReactionCooldown(ms) { reactionCooldownMs = ms; }
 export function enqueueReaction({ userId, emoji }) {
   if (!userId || !emoji) return;
+  const last = lastReactionAt.get(userId) || 0;
+  if (Date.now() - last < reactionCooldownMs) return;
+  lastReactionAt.set(userId, Date.now());
   const old = reactionQueue.findIndex(r => r.userId === userId);
   if (old >= 0) reactionQueue.splice(old, 1);            // only their newest message needs the reaction
   reactionQueue.push({ userId, emoji, tries: 0 });
@@ -49,7 +57,7 @@ async function drainReactions() {
     try {
       const res = await channel.react({ convId: u.conv_id || null, phone: u.phone && !u.phone.startsWith('conv:') ? u.phone : null, emoji: r.emoji });
       // 1.1.14: no real reaction on that chat (SMS, or it didn't land) → the emoji goes as a tiny text.
-      if (res && res.ok === false) { enqueueText({ userId: r.userId, text: r.emoji, kind: 'reply' }); log('outbox', `reaction ${r.emoji} for user ${r.userId} went as a text (${res.reason || 'no reaction support'})`); }
+      if (res && res.ok === false) { enqueueText({ userId: r.userId, text: r.emoji, kind: 'reaction' }); log('outbox', `reaction ${r.emoji} for user ${r.userId} went as a text (${res.reason || 'no reaction support'})`); }
       reactionQueue.shift();
     } catch (e) {
       if (e.notConnected) return;                          // Messages is down: try again on the next drain
@@ -110,6 +118,14 @@ const lastMediaNote = new Map();
 function fail(m, e) {
   const tries = get('SELECT tries FROM outbox WHERE id=?', m.id).tries;
   log('outbox', `send #${m.id} failed (${tries}):`, e.message);
+  // 1.1.15: a reaction text is fire-and-forget. A lone emoji often can't be found again in the chat
+  // (Google shows it without a text bubble), so the confirm path judged it "missing" and re-sent it —
+  // one reaction arrived as 👍 👍 👍 (up to 6 tries). Never resend a reaction; drop it quietly.
+  if (m.kind === 'reaction') {
+    holdUntil.delete(m.id);
+    run("UPDATE outbox SET status='failed', error=? WHERE id=?", String(e.message).slice(0, 300), m.id);
+    return;
+  }
   const limit = m.media ? 3 : maxTries(m.kind);      // 1.1.7: files get 3 tries, not 6 — fail faster, tell the person sooner
   if (tries >= limit) {
     holdUntil.delete(m.id);
@@ -147,7 +163,7 @@ async function checkUnconfirmed() {
   } else if (checks >= CHECK_AFTER_MS.length) {
     run("UPDATE outbox SET status='failed', checks=?, error=? WHERE id=?", checks, 'still "sending" in Google Messages after about 30 minutes', m.id);
     audit('system', 'outbox.failed', `#${m.id} (${m.kind}): still sending in Google Messages after about 30 minutes`);
-    if (m.kind !== 'admin' && m.kind !== 'code') onFail?.(m, new Error('still sending in Google Messages'));
+    if (m.kind !== 'admin' && m.kind !== 'code' && m.kind !== 'reaction') onFail?.(m, new Error('still sending in Google Messages'));
   } else {
     run('UPDATE outbox SET checks=?, check_at=? WHERE id=?', checks, now() + CHECK_AFTER_MS[checks] * checkScale, m.id);
     log('outbox', `#${m.id} still not shown as sent (check ${checks}); next look in ${CHECK_AFTER_MS[checks] * checkScale / 1000} s`);
