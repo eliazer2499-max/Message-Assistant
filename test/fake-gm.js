@@ -8,6 +8,12 @@ export function qrSvg(n) {
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) { const f = inFinder(r, c); if (f === true || (f === null && !finder(r, c) && rnd())) cells.push(`<rect x="${c}" y="${r}" width="1" height="1"/>`); }
   return 'data:image/svg+xml;base64,' + Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="-2 -2 ${N + 4} ${N + 4}" width="232" height="232" shape-rendering="crispEdges"><rect x="-2" y="-2" width="${N + 4}" height="${N + 4}" fill="#fff"/><g fill="#000">${cells.join('')}</g></svg>`).toString('base64');
 }
+// 1.1.11: the bytes behind /mediafile/<id> (a 1x1 png; labelled stand-ins for audio/video)
+export const FAKE_MEDIA = {
+  png: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
+  mp3: Buffer.from('fake-voice-note-bytes-1.1.11'),
+  mp4: Buffer.from('fake-video-bytes-1.1.11'),
+};
 export function fakeMessages() {
 const st = { mode: 'welcome', banner: '', qrN: 1, choice: false, qrChosen: false, remember: false, signInClicks: 0, convs: [{ id: '101', name: '(212) 555-0101', unread: false, msgs: [{ id: 'm1', out: false, text: 'old message from before' }, { id: 'm2', out: true, text: 'old reply' }] }], n: 10 };
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -20,7 +26,11 @@ const page = (body) => `<!doctype html><html><head><title>Messages</title></head
 // 1.0.7: an outgoing bubble can show Google's clock ("Sending…") or "Not sent"
 const statusHtml = (x) => x.state === 'pending' ? '<mws-message-status data-e2e-message-status="sending"><mat-icon>schedule</mat-icon><span>Sending…</span></mws-message-status>'
   : x.state === 'failed' ? '<mws-message-status><mat-icon>error</mat-icon><span>Not sent. Tap to retry</span></mws-message-status>' : (x.out ? '<mws-message-status><span>Sent</span></mws-message-status>' : '');
-const msgsHtml = (c) => c.msgs.map(x => `<mws-message-wrapper msg-id="${x.id}" is-outgoing="${x.out}"><div class="text-msg-content">${esc(x.text)}</div>${statusHtml(x)}</mws-message-wrapper>`).join('');
+// 1.1.11: incoming media a person sent TO the assistant (x.media on an incoming message) — bytes above, at module level
+const mediaHtml = (x) => (!x.media || x.out) ? '' : x.media === 'image' ? `<img src="/mediafile/${x.id}.png" width="160" height="120" alt="photo">`
+  : x.media === 'audio' ? `<audio controls src="/mediafile/${x.id}.mp3"></audio>`
+  : x.media === 'video' ? `<video src="/mediafile/${x.id}.mp4" width="160" height="120"></video>` : '';
+const msgsHtml = (c) => c.msgs.map(x => `<mws-message-wrapper msg-id="${x.id}" is-outgoing="${x.out}"><div class="text-msg-content">${esc(x.text)}</div>${mediaHtml(x)}${statusHtml(x)}</mws-message-wrapper>`).join('');
 const fake = http.createServer(async (req, res) => {
   let b = ''; for await (const c of req) b += c;
   const u = new URL(req.url, 'http://x'); const p = u.pathname;
@@ -38,6 +48,7 @@ const fake = http.createServer(async (req, res) => {
   if (req.method === 'POST' && p === '/usehere') { st.mode = 'connected'; st.banner = ''; res.end('{}'); return; }
   if (req.method === 'POST' && p === '/newchat') { const j = JSON.parse(b); const d10 = (s) => String(s).replace(/\D/g, '').slice(-10); const ex = st.convs.find(c => d10(c.name) === d10(j.to)); if (ex) { res.end(JSON.stringify({ id: ex.id })); return; } const id = String(500 + (++st.n)); st.convs.unshift({ id, name: j.to, unread: false, msgs: [] }); res.end(JSON.stringify({ id })); return; }
   if (p === '/live') { const cm = /\/conversations\/(\w+)$/.exec(u.searchParams.get('c') || ''); const c = cm && st.convs.find(x => x.id === cm[1]); if (c) c.unread = false; res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ list: listHtml(), msgs: c ? msgsHtml(c) : null, banner: st.banner, qr: qrSvg(st.qrN), mode: st.mode, autoNav: !!st.autoNav })); }
+  if (p.startsWith('/mediafile/')) { const ext = p.split('.').pop(); const buf = ext === 'png' ? FAKE_MEDIA.png : ext === 'mp4' ? FAKE_MEDIA.mp4 : FAKE_MEDIA.mp3; res.writeHead(200, { 'Content-Type': ext === 'png' ? 'image/png' : ext === 'mp4' ? 'video/mp4' : 'audio/mpeg', 'Content-Length': buf.length }); return res.end(buf); }
   if (req.method === 'POST' && p === '/qrchoose') { st.qrChosen = true; res.end('{}'); return; }
   if (req.method === 'POST' && p === '/remember') { st.remember = u.searchParams.get('on') === 'true'; res.end('{}'); return; }
   if (req.method === 'POST' && p === '/signin-click') { st.signInClicks++; res.end('{}'); return; }

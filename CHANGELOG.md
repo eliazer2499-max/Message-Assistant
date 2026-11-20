@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.12 — 2026-11-19
+- **The vault now works with APIs, not just website sign-ins.** A person saves any API token in their secure vault — GitHub is the example: they create a personal token on GitHub, paste it into their vault once, and the assistant can then work with their own repositories (list them, search, and more) through api.github.com. New tool vault_api: the server attaches the saved secret to the call as the Authorization header; the assistant itself never sees the secret, one person's entry can never be used by another, and if a service echoes the secret back it is scrubbed from the answer. Username+password entries can be used with basic auth. No admin setup and no app registration is involved — it is the person's own key for their own account, which is how token-style services (GitHub and most APIs) are meant to work.
+
+## 1.1.11 — 2026-11-19
+- **Incoming voice notes, pictures, videos and files now work.** Until now a message that was only media was skipped in silence. The driver now spots media in an incoming message, downloads the actual file from the Messages page (the element's own address first; clicking for the viewer's download as a fallback), and the assistant receives it on the person's turn: Gemini hears a voice note and sees a picture directly, and a model that can't open that kind of file says so instead of guessing. From there everything works as if the person had typed — search, reminders, notes, scheduling.
+- If a file can't be fetched from the page, the person is told plainly ("I could not open it — please type it or send it again") instead of hearing nothing.
+- History shows what arrived ([Voice note], [Photo], [Video], [File]) and a caption rides along with its picture.
+
+## 1.1.10 — 2026-11-19
+- **Files by text.** When someone asks for a file that lives on the web — a PDF, a form, a document, a spreadsheet, a zip — the assistant now downloads it and sends the file itself as an attachment (up to 100 MB), never a link. A web page address is refused with an explanation, so a page is never texted as if it were a file.
+- **Answers jump the queue.** A plain-text answer now goes out before a picture or file send in the Messages queue. A picture that keeps failing used to sit on the shared Messages page while people's questions waited behind it — the assistant looked deaf. Now they get their answer, and the file keeps trying after.
+- **The YouTube preview checks its match.** Search results are reordered so a title whose words match the request in order wins, and when the best match's title does not match the words asked for in order (the classic trap: asking for one person and finding another with the same name reversed), the assistant must say it may not be the right one and offer the other matches by number, instead of presenting a wrong guess as the answer.
+
+## 1.1.9 — 2026-11-19
+- **No more Bad Gateway when the server restarts or updates.** The dashboard port used to open only after everything had started — including launching the browser for Google Messages, which takes a while and can hang. Until then the site showed Bad Gateway; if the launch hung, it showed it forever while the program was actually running. The port now opens first: while the rest starts, the health check answers and the dashboard page loads, and data calls get a clean "starting" answer they can retry. The browser still comes up in the background exactly as before.
+
 ## 1.1.8 — 2026-11-18
 - **The Google connect switch actually saves now.** Flipping "Google connect is available to people" showed a green "on" — and stored nothing, so the next visit it was back where it started. The switch was sending its save in a shape the server silently ignored. The server now accepts both shapes, the switch saves the moment it is flipped, and the same silent bug is fixed in the "People may use their own AI keys" switch, which had it too.
 - **The admin Google card explains itself.** The switch now sits at the top of the card, and the Client ID / secret are labeled for what they are — the app's one-time Google key, not an account: the admin connects nothing here; each person connects their own Google account on their own page.
