@@ -944,11 +944,15 @@ export class GoogleMessagesWeb extends EventEmitter {
     const btn = this.page.locator(this.sel.attachButton).first();
     if (await btn.count().catch(() => 0)) {
       try {
-        const chooserP = this.page.waitForEvent('filechooser', { timeout: chooserMs });
+        // 1.1.13: the catch is attached NOW, not at the await below — if the click throws first, an
+        // un-caught chooser promise rejects on its own 6 s later as an UNHANDLED rejection and Node
+        // kills the whole process (on FLS's server this crash-looped the app: restart counter 77+).
+        const chooserP = this.page.waitForEvent('filechooser', { timeout: chooserMs }).catch(() => null);
         await btn.click({ timeout: 5000 });
         const item = this.page.locator(this.sel.attachMenuItem).first();
         if (await item.count().catch(() => 0)) await item.click({ timeout: 3000 }).catch(() => {});
         const chooser = await chooserP;
+        if (!chooser) throw new Error('no file chooser appeared');
         await chooser.setFiles(file);
         staged = await waitStaged();
         notes.push('attach button: ' + (staged ? 'staged' : 'chooser opened, nothing staged'));
@@ -958,9 +962,10 @@ export class GoogleMessagesWeb extends EventEmitter {
     if (!staged && !outOfTime()) for (const keys of ['Control+k', 'Control+Shift+a']) {
       try {
         await this.page.locator(this.sel.composer).first().click({ timeout: 3000 }).catch(() => {});
-        const chooserP = this.page.waitForEvent('filechooser', { timeout: chooserMs });
+        const chooserP = this.page.waitForEvent('filechooser', { timeout: chooserMs }).catch(() => null);
         await this.page.keyboard.press(keys);
         const chooser = await chooserP;
+        if (!chooser) throw new Error('no file chooser appeared');
         await chooser.setFiles(file);
         staged = await waitStaged();
         notes.push(`shortcut ${keys}: ` + (staged ? 'staged' : 'chooser opened, nothing staged'));

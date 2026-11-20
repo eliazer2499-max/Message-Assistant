@@ -318,6 +318,15 @@ export function handler() {
 }
 
 export async function main({ channel = null, port = cfg.port, host = cfg.host } = {}) {
+  // 1.1.13: a stray async error must NEVER take the whole server down. On FLS's server one orphaned
+  // filechooser promise (attachAndSend) rejected unhandled and Node killed the process on every media
+  // send — systemd restarted it 77+ times, which looked like "the server goes down every few minutes".
+  // Log it and keep serving; the line in the log names the culprit for a real fix.
+  if (!globalThis.__msaSafetyNet) {
+    globalThis.__msaSafetyNet = true;
+    process.on('unhandledRejection', (e) => { try { log('server', 'unhandled rejection — kept running:', String(e && e.message || e).slice(0, 300)); } catch {} });
+    process.on('uncaughtException', (e) => { try { log('server', 'uncaught exception — kept running:', String(e && e.message || e).slice(0, 300)); } catch {} });
+  }
   const srv = http.createServer(handler());
   await new Promise(r => srv.listen(port, host, r));   // 1.1.9: listen first — see the BOOTED guard in handler()
   let app;

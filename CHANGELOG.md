@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.13 — 2026-11-20
+- **THE crash is fixed — the one behind "the server goes down every few minutes".** The server's own log named it: when a picture or voice note was sent, the attach flow waited for Google's file chooser; if the attach button couldn't be clicked first, that wait timed out 6 seconds later with nobody listening, and Node killed the whole process over the unhandled error. systemd restarted the app (the log showed restart counter 77 and climbing), the same media send was retried after every restart, and it crashed again — a loop that also explains pictures failing (the crash cut the attach short before the paste/drop routes could run) and the assistant seeming deaf while it rebooted. The wait's error is now caught from the moment it starts, in both chooser routes, and the send simply moves on to the next attach route.
+- **A safety net, so this class of bug can never take the server down again:** a stray async error anywhere is now written to the log ("unhandled rejection — kept running") instead of killing the process. One bad send can fail; it cannot silence everyone.
+
 ## 1.1.12 — 2026-11-19
 - **The vault now works with APIs, not just website sign-ins.** A person saves any API token in their secure vault — GitHub is the example: they create a personal token on GitHub, paste it into their vault once, and the assistant can then work with their own repositories (list them, search, and more) through api.github.com. New tool vault_api: the server attaches the saved secret to the call as the Authorization header; the assistant itself never sees the secret, one person's entry can never be used by another, and if a service echoes the secret back it is scrubbed from the answer. Username+password entries can be used with basic auth. No admin setup and no app registration is involved — it is the person's own key for their own account, which is how token-style services (GitHub and most APIs) are meant to work.
 
