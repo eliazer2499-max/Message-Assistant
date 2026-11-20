@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.15 — 2026-11-20
+- **The 👍👍👍 flood is fixed.** A reaction that couldn't land as a real one was sent as a lone-emoji text — but Google shows a lone emoji without a readable text bubble, so the "did it send?" check judged it missing and the outbox typed it again, up to 6 times for one reaction. Reaction texts are now fire-and-forget: typed once, and if they can't be confirmed they are dropped quietly — never re-sent, never alerted.
+- **Reactions are capped:** at most one reaction per person per 10 minutes, so a busy conversation no longer gets a reaction for nearly every message.
+
 ## 1.1.14 — 2026-11-20
 - **Reactions now land on ANY message** (the admin's choice): on an RCS chat the assistant places the real reaction and then CHECKS the page to prove it landed; on a plain SMS chat — where Google offers no reactions — or anywhere the reaction can't be placed, the emoji is sent as a tiny text message instead, so the person always sees it. Reactions also run at a lower priority than answers and media now, so they can never delay a reply.
 - **The brain thinks first.** The system prompt now opens with: read the message again, answer what the person actually asked (not a nearby question, not a canned reply), ask one short question when a request could mean two things, and when they ask for something that can be shown or played — a picture, a song, a video, a file — send the thing itself, don't just describe it.
