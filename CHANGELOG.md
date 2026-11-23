@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.1.18 — 2026-11-22
+- **Incoming voice notes, second attempt — with eyes open.** 1.1.17's play-and-capture clicked the player *container* from inside the page, and on the real page nothing loaded (the play handler lives on the button itself). The press is now a real mouse click on the actual play control, and the watch for the sound covers the whole conversation, not just one element. And a failed fetch is no longer silent: the Activity log gains a `media.incoming_failed` line naming what the page showed at each step (what element, whether it had an address, what was pressed, whether anything loaded, how many audio responses the network saw) — so if a voice note still cannot be opened, the reason is readable in the dashboard instead of guessed at.
+
 ## 1.1.17 — 2026-11-22
 - **Incoming voice notes now open.** On the real Messages page a voice note is a custom player with no file address until it plays — the assistant received the note, found nothing to download, and honestly told the person "I couldn't open your voice note". Now, when a voice note (or video) arrives with no direct address, the assistant presses play on it in the page and captures the sound as it loads — from the playback's network traffic, or from the player element the page creates in order to play it — then pauses it again. The AI receives the actual audio, like it already did for pictures.
 
