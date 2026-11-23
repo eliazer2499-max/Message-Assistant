@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.1.17 — 2026-11-22
+- **Incoming voice notes now open.** On the real Messages page a voice note is a custom player with no file address until it plays — the assistant received the note, found nothing to download, and honestly told the person "I couldn't open your voice note". Now, when a voice note (or video) arrives with no direct address, the assistant presses play on it in the page and captures the sound as it loads — from the playback's network traffic, or from the player element the page creates in order to play it — then pauses it again. The AI receives the actual audio, like it already did for pictures.
+
 ## 1.1.16 — 2026-11-22
 - **Pictures and voice notes: two new attach routes, aimed at the failure in the server's own log.** Every failed send on the real page showed the same first steps: the attach button is found but a normal (coordinate) click on it times out, and both keyboard shortcuts open no chooser. New route (1b): the attach button is clicked from inside the page (a DOM click fires the page's own handler even when the button is covered or constantly re-rendered), including the menu item when the button opens a menu. New route (3b): the file is handed to the page's file box directly (DataTransfer + change event), the way the page's own framework listens for it. Both run inside the existing ~90-second cap, verified staged before Send, and never fall back to a link.
 - **Attach errors now lead with short per-route codes** (e.g. `attach failed [btn:click-timeout | btnJS:staged | …]`), because the dashboard cuts long lines and the old error's later routes were sliced away before they were ever seen.
