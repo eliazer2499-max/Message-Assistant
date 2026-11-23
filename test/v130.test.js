@@ -36,3 +36,22 @@ test('a player-style voice note (no address until it plays) still reaches the AI
     await until(() => conv().msgs.some(m => m.out && /mock saw audio/.test(m.text)), 40000, 'the answer was typed back into the chat');
   } finally { await app.stop(); }
 });
+
+test('a voice note that never loads still answers honestly — and the failure is readable in the Activity log', { skip: canRun ? false : 'no Playwright/Chromium here', timeout: 180000 }, async () => {
+  st.mode = 'connected'; st.voicePlayer = true; st.voiceBroken = true;
+  st.convs.length = 0;
+  st.convs.push({ id: '302', name: '+1 646-555-0100', unread: false, msgs: [{ id: 'b0', out: false, text: 'old admin text' }] });
+  const { main } = await import('../src/server.js');
+  const db = await import('../src/db.js');
+  const app = await main({ port: 0 });
+  const conv = () => st.convs.find(c => c.id === '302');
+  try {
+    await until(() => app.channel.status().state === 'connected', 30000, 'connected');
+    await until(() => db.setting('gm_baseline_done') === '1', 10000, 'baseline');
+    conv().msgs.push({ id: 'vnX', out: false, text: '', media: 'audio' }); conv().unread = true;
+    const rows = await until(() => { const r = db.all("SELECT detail FROM audit WHERE action='media.incoming_failed'"); return r.length ? r : null; }, 120000, 'the failure diagnosis in the audit log');
+    assert.match(rows[0].detail, /audio: element .* no file address/, 'stage 1 named: ' + rows[0].detail);
+    assert.match(rows[0].detail, /play: pressing/, 'the play attempt named: ' + rows[0].detail);
+    assert.match(rows[0].detail, /nothing loaded/, 'the outcome named: ' + rows[0].detail);
+  } finally { st.voiceBroken = false; await app.stop(); }
+});

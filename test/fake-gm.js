@@ -48,7 +48,7 @@ const fake = http.createServer(async (req, res) => {
     res.end('{}'); return;
   }
   if (req.method === 'POST' && p === '/react') { const j = JSON.parse(b); const c = st.convs.find(x => x.id === j.conv); if (c && c.msgs[j.idx]) c.msgs[j.idx].reaction = j.emoji; res.end('{}'); return; }
-  if (req.method === 'POST' && p.startsWith('/vplayed/')) { const id = p.split('/')[2]; for (const c of st.convs) for (const x of c.msgs) if (x.id === id) x.played = true; res.end('{}'); return; }
+  if (req.method === 'POST' && p.startsWith('/vplayed/')) { const id = p.split('/')[2]; if (!st.voiceBroken) for (const c of st.convs) for (const x of c.msgs) if (x.id === id) x.played = true; res.end('{}'); return; }
   if (req.method === 'POST' && p === '/usehere') { st.mode = 'connected'; st.banner = ''; res.end('{}'); return; }
   if (req.method === 'POST' && p === '/newchat') { const j = JSON.parse(b); const d10 = (s) => String(s).replace(/\D/g, '').slice(-10); const ex = st.convs.find(c => d10(c.name) === d10(j.to)); if (ex) { res.end(JSON.stringify({ id: ex.id })); return; } const id = String(500 + (++st.n)); st.convs.unshift({ id, name: j.to, unread: false, msgs: [] }); res.end(JSON.stringify({ id })); return; }
   if (p === '/live') { const cm = /\/conversations\/(\w+)$/.exec(u.searchParams.get('c') || ''); const c = cm && st.convs.find(x => x.id === cm[1]); if (c) c.unread = false; res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ list: listHtml(), msgs: c ? msgsHtml(c) : null, banner: st.banner, qr: qrSvg(st.qrN), mode: st.mode, autoNav: !!st.autoNav })); }
