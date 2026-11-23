@@ -845,7 +845,7 @@ export class GoogleMessagesWeb extends EventEmitter {
       // staged before pressing Send (below).
       if (media && !skipParts) {
         let ok = false;
-        try { await this.attachAndSend(media); ok = true; } catch (e) { this.lastAttachError = String(e.message || e).slice(0, 200); }
+        try { await this.attachAndSend(media); ok = true; } catch (e) { this.lastAttachError = String(e.message || e).slice(0, 400); }
         if (!ok) { const e = new Error(`the ${isAudioFile(media) ? 'audio file' : 'file'} could not be attached in Google Messages: ` + this.lastAttachError); e.partsDone = skipParts; e.convId = id; throw e; }
       }
       // 1.0.7: each part must show up in the chat as sent (not "Sending…") before the next one; a part that
@@ -923,6 +923,7 @@ export class GoogleMessagesWeb extends EventEmitter {
     // (4) pasting / dropping the file into the compose box (Messages supports both). The steps tried are
     // named in the error when all fail, so the Activity log says exactly what the page did.
     const notes = [];
+    const codes = [];   // 1.1.16: terse per-route results, put FIRST in the error — the dashboard cuts long lines, and the full notes used to be sliced away before the file-box/paste routes were even named
     // 1.1.7: one attach attempt gets at most ~90 s in total. This page is shared by everyone — a hopeless
     // attach must not sit on it for minutes while other people's texts and new messages wait behind it.
     const deadline = Date.now() + (this.opts.attachDeadlineMs ?? 90000);
@@ -958,10 +959,35 @@ export class GoogleMessagesWeb extends EventEmitter {
         await chooser.setFiles(file);
         staged = await waitStaged();
         notes.push('attach button: ' + (staged ? 'staged' : 'chooser opened, nothing staged'));
-      } catch (e) { notes.push('attach button: ' + String(e.message || e).slice(0, 80)); }
-    } else notes.push('attach button: not on this page');
+        codes.push('btn:' + (staged ? 'staged' : 'unstaged'));
+      } catch (e) { const m = String(e.message || e); notes.push('attach button: ' + m.slice(0, 80)); codes.push('btn:' + (/timeout/i.test(m) ? 'click-timeout' : /no file chooser/.test(m) ? 'no-chooser' : 'error')); }
+    } else { notes.push('attach button: not on this page'); codes.push('btn:absent'); }
+    // (1b) 1.1.16: the same button, clicked from INSIDE the page. On FLS's real page the Playwright click
+    // times out every time (the button is in the DOM but never becomes clickable — the app re-renders /
+    // covers it), while a DOM click still fires the page's own handler. A menu opened by the click gets
+    // its attach item clicked the same way, and the chooser wait is created first (guarded, per 1.1.13).
+    if (!staged && !outOfTime()) {
+      try {
+        const chooserP = this.page.waitForEvent('filechooser', { timeout: chooserMs }).catch(() => null);
+        const clicked = await this.page.evaluate((sel) => { const el = document.querySelector(sel); if (!el) return false; el.click(); return true; }, this.sel.attachButton).catch(() => false);
+        if (!clicked) throw new Error('button not in the DOM');
+        await sleep(400);
+        await this.page.evaluate(() => {
+          const item = document.querySelector('[data-e2e-picker-item="ATTACHMENT"]') || [...document.querySelectorAll('[role="menuitem"], [role="option"], li, button')].find(e => /attach|upload/i.test(e.textContent || '') && e.offsetParent !== null);
+          if (item) item.click();
+        }).catch(() => {});
+        const chooser = await chooserP;
+        if (!chooser) throw new Error('no file chooser appeared');
+        await chooser.setFiles(file);
+        staged = await waitStaged();
+        notes.push('attach button (JS click): ' + (staged ? 'staged' : 'chooser opened, nothing staged'));
+        codes.push('btnJS:' + (staged ? 'staged' : 'unstaged'));
+      } catch (e) { const m = String(e.message || e); notes.push('attach button (JS click): ' + m.slice(0, 60)); codes.push('btnJS:' + (/not in the DOM/.test(m) ? 'absent' : /no file chooser/.test(m) ? 'no-chooser' : 'error')); }
+    }
     // (2) the keyboard shortcut's chooser (Ctrl+K, then Ctrl+Shift+A)
+    let keysTried = false;
     if (!staged && !outOfTime()) for (const keys of ['Control+k', 'Control+Shift+a']) {
+      keysTried = true;
       try {
         await this.page.locator(this.sel.composer).first().click({ timeout: 3000 }).catch(() => {});
         const chooserP = this.page.waitForEvent('filechooser', { timeout: chooserMs }).catch(() => null);
@@ -974,6 +1000,7 @@ export class GoogleMessagesWeb extends EventEmitter {
         if (staged) break;
       } catch (e) { notes.push(`shortcut ${keys}: no chooser`); }
     }
+    if (keysTried) codes.push('keys:' + (staged ? 'staged' : 'no-chooser'));
     // (3) the hidden file box
     if (!staged && !outOfTime()) {
       const input = this.page.locator(this.sel.attachInput).first();
@@ -981,7 +1008,30 @@ export class GoogleMessagesWeb extends EventEmitter {
         await input.setInputFiles(file, { timeout: 8000 }).catch((e) => { notes.push('file box: ' + String(e.message || e).slice(0, 80)); });
         staged = await waitStaged();
         if (!notes.some(n => n.startsWith('file box:') && n.length > 12)) notes.push('file box: ' + (staged ? 'staged' : 'set, nothing staged'));
-      } else notes.push('file box: not on this page');
+        codes.push('box:' + (staged ? 'staged' : 'unstaged'));
+      } else { notes.push('file box: not on this page'); codes.push('box:absent'); }
+    }
+    // (3b) 1.1.16: hand the file to the page's file box directly (DataTransfer + change event) — the way
+    // the page's own framework listens for it, for boxes Playwright's setInputFiles can't reach or that
+    // only appear inside the page's own flow.
+    if (!staged && !outOfTime()) {
+      try {
+        const b64 = fs.readFileSync(file).toString('base64');
+        const injected = await this.page.evaluate(({ b64, name, mime }) => {
+          const input = document.querySelector('input[type="file"]');
+          if (!input) return false;
+          const bin = atob(b64); const arr = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+          const dt = new DataTransfer(); dt.items.add(new File([arr], name, { type: mime }));
+          input.files = dt.files;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }, { b64, name, mime }).catch(() => false);
+        if (!injected) throw new Error('no file box in the DOM');
+        staged = await waitStaged();
+        notes.push('file box (direct): ' + (staged ? 'staged' : 'set, nothing staged'));
+        codes.push('boxJS:' + (staged ? 'staged' : 'unstaged'));
+      } catch (e) { const m = String(e.message || e); notes.push('file box (direct): ' + m.slice(0, 60)); codes.push('boxJS:' + (/no file box/.test(m) ? 'absent' : 'error')); }
     }
     // (4) paste, then drop, the file itself into the compose area
     if (!staged && !outOfTime()) {
@@ -999,10 +1049,11 @@ export class GoogleMessagesWeb extends EventEmitter {
         }, { b64, name, mime, composerSel: this.sel.composer, rootSel: this.sel.composeRoot, how });
         await paste('paste'); staged = await waitStaged();
         notes.push('paste: ' + (staged ? 'staged' : 'nothing staged'));
-        if (!staged) { await paste('drop'); staged = await waitStaged(); notes.push('drop: ' + (staged ? 'staged' : 'nothing staged')); }
-      } catch (e) { notes.push('paste/drop: ' + String(e.message || e).slice(0, 80)); }
+        codes.push('paste:' + (staged ? 'staged' : 'no'));
+        if (!staged) { await paste('drop'); staged = await waitStaged(); notes.push('drop: ' + (staged ? 'staged' : 'nothing staged')); codes.push('drop:' + (staged ? 'staged' : 'no')); }
+      } catch (e) { notes.push('paste/drop: ' + String(e.message || e).slice(0, 80)); codes.push('paste:error'); }
     }
-    if (!staged) throw new Error('the file never appeared in the compose box [' + notes.join('; ') + (outOfTime() ? '; out of time — stopped trying' : '') + ']');
+    if (!staged) throw new Error('attach failed [' + codes.join(' | ') + '] — the file never appeared in the compose box. Steps: ' + notes.join('; ') + (outOfTime() ? '; out of time — stopped trying' : ''));
     // bigger files need a moment between staging and Send, and time to show as sent after (1.1.4: scaled)
     await sleep(Math.min(10000, (this.opts.attachWaitMs ?? 1500) + Math.round(mb * 400)));
     const send = this.page.locator(this.sel.sendButton).first();
