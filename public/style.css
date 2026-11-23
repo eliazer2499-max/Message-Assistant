@@ -93,6 +93,9 @@ nav button.on { color:var(--pri); } nav button.on span { font-weight:700; }
 .kv { display:grid; grid-template-columns:1fr auto; gap:8px 12px; font-size:14px; } .kv span { color:var(--muted); } .kv b { text-align:right; }
 #homeQueue .kv b, .sheetbody .kv b { font-weight:600; }
 .alert { font-size:14px; padding:10px 0; border-top:1px solid var(--line); } .alert:first-child { border-top:0; padding-top:0; } .alert.error { color:var(--bad); } .alert.warn { color:var(--warn); }
+/* 1.1.16: the Alerts card scrolls inside itself — a phone flapping on and off used to fill the whole
+   home page with repeated alerts and strand the other cards in a sea of empty space. */
+#alerts { max-height:min(520px, 62vh); overflow-y:auto; overscroll-behavior:contain; }
 
 /* ---------- lists ---------- */
 .item { border-top:1px solid var(--line); padding:14px 0; } .item:first-child { border-top:0; padding-top:2px; } .item:last-child { padding-bottom:2px; }
@@ -219,7 +222,7 @@ body.me #sendMsg { margin:0; padding:4px 12px 8px; background:var(--card); }
   nav button span { font-size:15px; }
   nav button.on { background:var(--pri-soft); }
   .badge { position:static; margin-left:auto; }
-  main { grid-column:2; grid-row:3; width:100%; max-width:1180px; margin:0; padding:28px 32px 48px; }
+  main { grid-column:2; grid-row:3; width:100%; max-width:1180px; margin:0 auto; padding:28px 32px 48px; }
 
   /* views lay their cards out in two columns */
   #v-home:not(.hidden) { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 18px; align-items:start; }
@@ -233,7 +236,7 @@ body.me #sendMsg { margin:0; padding:4px 12px 8px; background:var(--card); }
   #v-settings > .card:has(#activity), #v-settings > #ver { grid-column:1 / -1; }
   #v-sites > #sitesSet { grid-row:1 / span 2; }
   #v-keys > .card:first-child { grid-column:1; }
-  #v-people, #v-keys { max-width:880px; }
+  #v-people, #v-keys { max-width:880px; margin-inline:auto; }
   #v-keys:has(#keyForm:not(.hidden)) { max-width:none; }
   .sheet { align-items:center; padding:24px; }
   .sheetbody { border-radius:20px; max-width:640px; max-height:86vh; padding:24px; }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.16 — 2026-11-22
+- **Pictures and voice notes: two new attach routes, aimed at the failure in the server's own log.** Every failed send on the real page showed the same first steps: the attach button is found but a normal (coordinate) click on it times out, and both keyboard shortcuts open no chooser. New route (1b): the attach button is clicked from inside the page (a DOM click fires the page's own handler even when the button is covered or constantly re-rendered), including the menu item when the button opens a menu. New route (3b): the file is handed to the page's file box directly (DataTransfer + change event), the way the page's own framework listens for it. Both run inside the existing ~90-second cap, verified staged before Send, and never fall back to a link.
+- **Attach errors now lead with short per-route codes** (e.g. `attach failed [btn:click-timeout | btnJS:staged | …]`), because the dashboard cuts long lines and the old error's later routes were sliced away before they were ever seen.
+- **Dashboard design (desktop and phone):** the Alerts card on Home now scrolls inside itself instead of growing down the whole page — a phone flapping on and off used to bury the page in repeated alerts and strand the other cards. On wide screens the content is centered instead of hugging the left with a dead empty zone on the right, and the People / AI keys views are centered the same way.
+
 ## 1.1.15 — 2026-11-20
 - **The 👍👍👍 flood is fixed.** A reaction that couldn't land as a real one was sent as a lone-emoji text — but Google shows a lone emoji without a readable text bubble, so the "did it send?" check judged it missing and the outbox typed it again, up to 6 times for one reaction. Reaction texts are now fire-and-forget: typed once, and if they can't be confirmed they are dropped quietly — never re-sent, never alerted.
 - **Reactions are capped:** at most one reaction per person per 10 minutes, so a busy conversation no longer gets a reaction for nearly every message.
