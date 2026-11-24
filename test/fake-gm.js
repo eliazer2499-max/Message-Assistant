@@ -29,7 +29,7 @@ const statusHtml = (x) => x.state === 'pending' ? '<mws-message-status data-e2e-
   : x.state === 'failed' ? '<mws-message-status><mat-icon>error</mat-icon><span>Not sent. Tap to retry</span></mws-message-status>' : (x.out ? '<mws-message-status><span>Sent</span></mws-message-status>' : '');
 // 1.1.11: incoming media a person sent TO the assistant (x.media on an incoming message) — bytes above, at module level
 const mediaHtml = (x) => (!x.media || x.out) ? '' : x.media === 'image' ? `<img src="/mediafile/${x.id}.png" width="160" height="120" alt="photo">`
-  : x.media === 'audio' && st.voicePlayer ? `<div data-e2e-attachment class="vnote" aria-label="Voice message" data-vsrc="/mediafile/${x.id}.mp3"><button type="button" aria-label="Play voice message">▶</button><span>0:06</span>${x.played ? `<audio src="/mediafile/${x.id}.mp3"></audio>` : ''}</div>`
+  : x.media === 'audio' && st.voicePlayer ? `<div data-e2e-attachment class="vnote" aria-label="Voice message" data-vsrc="/mediafile/${x.id}.mp3"><button type="button" aria-label="Play voice message">▶</button><audio${x.played ? ` src="/mediafile/${x.id}.mp3"` : ''}></audio><span>0:06</span></div>`
   : x.media === 'audio' ? `<audio controls src="/mediafile/${x.id}.mp3"></audio>`
   : x.media === 'video' ? `<video src="/mediafile/${x.id}.mp4" width="160" height="120"></video>` : '';
 const msgsHtml = (c) => c.msgs.map((x, i) => `<mws-message-wrapper msg-id="${x.id}" is-outgoing="${x.out}"><div class="text-msg-content">${esc(x.text)}</div>${mediaHtml(x)}${statusHtml(x)}${x.out ? '' : `<button aria-label="React with emoji" class="reactBtn" data-idx="${i}">React</button>`}${x.reaction ? `<span data-e2e-reaction>${x.reaction}</span>` : ''}</mws-message-wrapper>`).join('');
