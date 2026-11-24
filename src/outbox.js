@@ -31,16 +31,14 @@ export function stopOutbox() { if (timer) clearInterval(timer); timer = null; }
 // 1.1.4: reactions are not texts — a small in-memory queue, worked off first in drain() (they should land while
 // the person is still looking at their message). Best effort: two tries, then dropped; a restart forgets them.
 const reactionQueue = [];
-// 1.1.15: at most ONE reaction per person per 10 minutes. Without a cap, a chatty conversation got a
-// reaction (or an emoji text) for nearly every message — "it reacts and reacts and reacts" (FLS).
-const lastReactionAt = new Map();
-let reactionCooldownMs = 10 * 60000;
-export function _setReactionCooldown(ms) { reactionCooldownMs = ms; }
+// 1.1.15: reactions were rationed to ONE per person per 10 minutes ("it reacts and reacts and
+// reacts"). 1.1.22: FLS asked for the opposite — react MORE often, and a reaction that can't land
+// must never become a text (below), so a missed one is silent instead of a flood. The rationing is
+// gone; what stays is the queue rule that only a person's NEWEST pending reaction is kept (a newer
+// message's reaction replaces one that hasn't gone out yet). A reaction that already landed can
+// still be CHANGED: reacting again on the same message with a different emoji replaces it.
 export function enqueueReaction({ userId, emoji }) {
   if (!userId || !emoji) return;
-  const last = lastReactionAt.get(userId) || 0;
-  if (Date.now() - last < reactionCooldownMs) return;
-  lastReactionAt.set(userId, Date.now());
   const old = reactionQueue.findIndex(r => r.userId === userId);
   if (old >= 0) reactionQueue.splice(old, 1);            // only their newest message needs the reaction
   reactionQueue.push({ userId, emoji, tries: 0 });
@@ -56,11 +54,12 @@ async function drainReactions() {
     if (!u) { reactionQueue.shift(); continue; }
     try {
       const res = await channel.react({ convId: u.conv_id || null, phone: u.phone && !u.phone.startsWith('conv:') ? u.phone : null, emoji: r.emoji });
-      // 1.1.14: no real reaction on that chat (SMS, or it didn't land) → the emoji goes as a tiny text.
-      // 1.1.21: the reason ALSO goes to the dashboard Activity log — it used to live only in the server
-      // logs, which FLS cannot reach (he cannot type in the server console), so why real reactions
-      // never land on his page stayed invisible while every other failure became readable there.
-      if (res && res.ok === false) { enqueueText({ userId: r.userId, text: r.emoji, kind: 'reaction' }); log('outbox', `reaction ${r.emoji} for user ${r.userId} went as a text (${res.reason || 'no reaction support'})`); audit('assistant', 'reaction.as_text', `${r.emoji} for ${u.name || u.phone || ('user ' + r.userId)}: ${res.reason || 'no reaction support'}`); }
+      // 1.1.14–1.1.21: no real reaction on that chat (SMS, or it didn't land) → the emoji went as a
+      // tiny text, and 1.1.21 put the reason in the dashboard Activity log. 1.1.22: FLS reversed the
+      // text fallback — "react to messages, not send a reaction". A reaction that can't land is now
+      // dropped quietly; the ONLY trace is the Activity line (renamed, since no text is sent any
+      // more), which names the step that failed so the landing itself can be fixed from evidence.
+      if (res && res.ok === false) { log('outbox', `reaction ${r.emoji} for user ${r.userId} did not land (${res.reason || 'no reaction support'}) — no text sent`); audit('assistant', 'reaction.not_landed', `${r.emoji} for ${u.name || u.phone || ('user ' + r.userId)}: ${res.reason || 'no reaction support'}`); }
       reactionQueue.shift();
     } catch (e) {
       if (e.notConnected) return;                          // Messages is down: try again on the next drain

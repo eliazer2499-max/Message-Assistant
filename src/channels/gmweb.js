@@ -863,7 +863,7 @@ export class GoogleMessagesWeb extends EventEmitter {
   async captureByPlaying(idx, cap, note = () => {}) {
     const page = this.page;
     if (!page) return null;
-    let best = null, netSeen = 0, bestOctet = null, octetSeen = 0, fragSeen = 0, fragGot = 0, fragOf = 0;
+    let best = null, netSeen = 0, bestOctet = null, octetSeen = 0, fragSeen = 0, fragGot = 0, fragOf = 0, orphanSeen = 0, orphanBytes = 0;
     // 1.1.19: Google may serve the sound as a generic download (application/octet-stream) — accept those
     // too, but only when the bytes sniff as a known audio format, so unrelated traffic can't slip in.
     const sniffAudio = (buf) => {
@@ -905,8 +905,21 @@ export class GoogleMessagesWeb extends EventEmitter {
       resp.body().then((buf) => {
         if (!buf || !buf.length || buf.length > cap) return;
         const cr = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(String(resp.headers()['content-range'] || ''));
-        if (resp.status() === 206 && cr && Number(cr[3]) > buf.length && Number(cr[3]) <= cap) acceptFrag(buf, ct, Number(cr[1]), Number(cr[3]), resp.url());
-        else acceptWhole(buf, ct);
+        if (resp.status() === 206) {
+          // 1.1.22: a 206 is a PIECE, never a file. 1.1.20 recognised only pieces whose Content-Range
+          // carried a plain numeric total; a piece served as "bytes 0-99/*" (or with the header shaped
+          // differently) fell through to acceptWhole, and a FRAGMENT was handed to the model as the
+          // whole voice note — Gemini refused it (the 400 in brain.switch) and the note went unread.
+          // Only sometimes: it depended on how the sound happened to be served that time (FLS: "it
+          // doesn't always read voice notes, only sometimes"). A piece that cannot be placed is now
+          // counted for the diagnosis and never accepted; the capture waits for a whole 200, a
+          // complete set of pieces, or a single range that IS the whole file.
+          if (cr && Number(cr[1]) === 0 && Number(cr[3]) === buf.length) acceptWhole(buf, ct);
+          else if (cr && Number(cr[3]) > buf.length && Number(cr[3]) <= cap) acceptFrag(buf, ct, Number(cr[1]), Number(cr[3]), resp.url());
+          else { orphanSeen++; orphanBytes = Math.max(orphanBytes, buf.length); }
+          return;
+        }
+        acceptWhole(buf, ct);
       }).catch(() => {});
     };
     page.on('response', onResp);
@@ -987,7 +1000,7 @@ export class GoogleMessagesWeb extends EventEmitter {
       await page.keyboard.press('Escape').catch(() => {});
       if (best) { note(`play: captured ${best.buf.length} bytes from the network (${best.mime})`); return { data: best.buf.toString('base64'), mime: best.mime, name: '' }; }
       if (bestOctet) { note(`play: captured ${bestOctet.buf.length} bytes served as a download (${bestOctet.mime})`); return { data: bestOctet.buf.toString('base64'), mime: bestOctet.mime, name: '' }; }
-      note(`play: nothing loaded (media element ${elSeen ? 'appeared but had no loadable address' : 'never appeared'}; ${netSeen} audio/video network responses${octetSeen ? `; ${octetSeen} download-type responses, none of them audio` : ''}${fragSeen ? `; the sound arrived only in pieces (${fragGot} of ${fragOf} bytes)` : ''})`);
+      note(`play: nothing loaded (media element ${elSeen ? 'appeared but had no loadable address' : 'never appeared'}; ${netSeen} audio/video network responses${octetSeen ? `; ${octetSeen} download-type responses, none of them audio` : ''}${fragSeen ? `; the sound arrived only in pieces (${fragGot} of ${fragOf} bytes)` : ''}${orphanSeen ? `; ${orphanSeen} piece(s) arrived with no usable size header (largest ${orphanBytes} bytes) and were not accepted as the file` : ''})`);
       return null;
     } finally { page.off('response', onResp); }
   }
@@ -1230,8 +1243,9 @@ export class GoogleMessagesWeb extends EventEmitter {
   }
   /** 1.1.4 → 1.1.14: react to the person's newest incoming message in this chat. RCS chats get the real
    *  reaction, VERIFIED on the page afterwards; anything else (an SMS chat, a missing picker, a reaction
-   *  that did not land) returns { ok:false, reason } and the outbox sends the emoji as a tiny text instead —
-   *  FLS's choice: a reaction on ANY message. Throws only when Messages itself is down (notConnected),
+   *  that did not land) returns { ok:false, reason }. 1.1.14–1.1.21 the outbox then sent the emoji as a
+   *  tiny text; 1.1.22 (FLS: "react to messages, not send a reaction") drops it quietly instead, and the
+   *  reason goes to the dashboard Activity log. Throws only when Messages itself is down (notConnected),
    *  so the outbox can retry later; a missed reaction must never hold up a text. */
   react({ convId = null, phone = null, emoji }) {
     return this.enqueue('react', async () => {

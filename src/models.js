@@ -410,6 +410,15 @@ export async function callModel(args, opts = {}) {
       : 'No AI key yet. Open the dashboard → AI keys → Add key (a free Gemini key comes from aistudio.google.com/apikey).');
     e.noKeys = true; throw e;
   }
+  // 1.1.22: a voice note answered by a key that cannot hear is a note that goes unread — and it only
+  // happened SOMETIMES: whenever the hearing key was resting, the chain walked past it to a deaf key,
+  // which answered from the "cannot open it" note. If a hearing key exists and is only resting, wait
+  // for it (the agent turns allResting into a queue wait, exactly like every key resting).
+  if (mediaKindsOf(args.items || []).includes('audio')) {
+    const rowsNow = keys.map(k => aikeys.keyRow(k.id)).filter(Boolean);
+    const waitAt = aikeys.hearingWaitAt(rowsNow, now());
+    if (waitAt) { const e = userError('Every key that can hear a voice note is resting right now.'); e.allResting = true; e.retryAt = waitAt; throw e; }
+  }
   const reasons = new Map();            // key id → why it was not used, for the final message
   const retryable = new Set();          // ids that failed in a way a short wait may fix
   const prevInUse = setting('ai_key_in_use');

@@ -169,6 +169,21 @@ export function cannotTake(r, mediaKinds = []) {
   const c = freshCaps(r); if (!c) return [];
   return [...new Set(mediaKinds)].filter(k => MEDIA_CAP[k] && c[MEDIA_CAP[k]] === false);
 }
+/** 1.1.22: can this key HEAR a voice note? Gemini takes audio directly; an OpenAI-style key only when
+ *  its Test showed audio works (an untested one is sent the note as text instead — see models.js). */
+export const canHear = (r) => !!r && (r.kind === 'gemini' || freshCaps(r)?.audio === true);
+/** For a voice-note job: if no key that can hear is free but one is only RESTING, the job should wait
+ *  for it rather than let a deaf key answer "can't open it" (FLS: "it doesn't always read voice notes,
+ *  only sometimes" — the sometimes was exactly when the hearing key was resting). Returns the moment
+ *  the first hearing key wakes, or 0 for "do not wait" (a hearing key is free, or none exists, or the
+ *  hearing keys are broken rather than resting). */
+export function hearingWaitAt(rows, t) {
+  const hearing = (rows || []).filter(canHear);
+  if (!hearing.length) return 0;
+  if (hearing.some(r => !(r.cool_until > t) && r.problem !== 'model not found')) return 0;
+  const at = hearing.map(r => r.cool_until).filter(x => x > t);
+  return at.length ? Math.min(...at) : 0;
+}
 
 /** Carry the 2.2 settings over (runs on start and before every use; each part runs once). */
 export function ensureKeys() {

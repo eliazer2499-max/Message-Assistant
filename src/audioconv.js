@@ -19,6 +19,9 @@ function run(cmd, args, ms) {
   });
 }
 
+/** Why the last conversion failed (for the Activity log — a failed conversion used to be visible only
+ *  in the server logs, so a format the server's ffmpeg cannot read stayed invisible). */
+export let lastConvertError = '';
 /** Voice-note bytes in any format ffmpeg knows → MP3 bytes, or null when it cannot be converted. */
 export async function audioToMp3(buf) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'msa-audio-'));
@@ -29,7 +32,8 @@ export async function audioToMp3(buf) {
     const out = fs.readFileSync(outF);
     return out.length ? out : null;
   } catch (e) {
-    log('audioconv', 'conversion failed:', String(e.stderr || e.message || e).slice(0, 200));
+    lastConvertError = String(e.stderr || e.message || e).slice(0, 200);
+    log('audioconv', 'conversion failed:', lastConvertError);
     return null;
   } finally {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}

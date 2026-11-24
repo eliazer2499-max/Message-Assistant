@@ -10,7 +10,7 @@ import { enqueueJob } from './agent.js';
 import { alert } from './alerts.js';
 import { PRODUCT } from './config.js';
 import { handleUserText as siteDecision } from './siteflow.js';
-import { audioToMp3 } from './audioconv.js';
+import { audioToMp3, lastConvertError } from './audioconv.js';
 import * as S from './sites.js';
 
 // 1.1.11: incoming media (a voice note / picture / video / file sent TO the assistant)
@@ -111,6 +111,10 @@ export async function handleIncoming(m) {
         if (mm.kind === 'audio' && mime !== 'audio/mpeg') {
           const mp3 = await audioToMp3(buf).catch(() => null);
           if (mp3 && mp3.length) { buf = mp3; mime = 'audio/mpeg'; name = name ? name.replace(/\.[\p{L}\d]{1,8}$/u, '') + '.mp3' : 'voice-note.mp3'; }
+          // 1.1.22: a failed conversion used to be silent here (server logs only) — the note kept a
+          // format a model may refuse, and nobody could see why some notes go unread. It is in the
+          // dashboard Activity now, with ffmpeg's own reason.
+          else audit('system', 'media.audio_unconverted', `${name || 'voice note'} (${mime}) kept in its original format — the MP3 conversion failed: ${lastConvertError || 'unknown reason'}`);
         }
         const ext = (name && /\.([\p{L}\d]{1,8})$/u.exec(name)?.[1]) || EXT_OF_MIME[mime] || 'bin';
         const saved = S.saveMedia(buf, { userId: user.id, ext, name: name || ('attachment.' + ext) });

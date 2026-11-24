@@ -71,6 +71,8 @@ export async function ytdlpPath() {
   _ytdlp = ''; return '';
 }
 export const isYoutubeUrl = (u) => /(?:(?:www\.|music\.)?youtube\.com\/(?:watch|shorts|live)|youtu\.be\/)/i.test(String(u || ''));
+const durToSec = (t) => { const p = String(t || '').split(':').map(Number); if (!p.length || p.some(isNaN)) return 0; return p.reduce((a, n) => a * 60 + n, 0); };
+const ageToSec = (t) => { const m = /(\d+)\s*(second|minute|hour|day|week|month|year)s?\s+ago/i.exec(String(t || '').replace(/^streamed\s+/i, '')); if (!m) return null; return Number(m[1]) * ({ second: 1, minute: 60, hour: 3600, day: 86400, week: 604800, month: 2592000, year: 31536000 }[m[2].toLowerCase()] || 0) || null; };
 export function parseYoutubeSearch(html) {
   const out = [];
   for (const chunk of String(html || '').split('"videoRenderer":').slice(1)) {
@@ -80,7 +82,13 @@ export function parseYoutubeSearch(html) {
     const tm = /"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/.exec(chunk) || /"title":\{"simpleText":"((?:[^"\\]|\\.)*)"/.exec(chunk);
     const title = tm ? tm[1].replace(/\\u0026/g, '&').replace(/\\"/g, '"').replace(/\\\\/g, '\\') : '';
     const len = /"lengthText":\{[\s\S]{0,160}?"simpleText":"([\d:]+)"/.exec(chunk)?.[1] || '';
-    out.push({ id, title, duration: len, url: 'https://www.youtube.com/watch?v=' + id });
+    // 1.1.22: livestreams poison "his latest video" — the results page marks them: a LIVE badge (live
+    // right now) and a "Streamed …" published line (a past stream, usually hours long). Capture both,
+    // plus the age, so rankYoutubeMatches can put a regular video first.
+    const head = chunk.slice(0, 8000);
+    const live = /"iconType":"LIVE"/.test(head) || /BADGE_STYLE_TYPE_LIVE/.test(head);
+    const pub = /"publishedTimeText":\{"simpleText":"([^"]+)"/.exec(chunk)?.[1] || '';
+    out.push({ id, title, duration: len, duration_seconds: durToSec(len), live, streamed: /^streamed\b/i.test(pub), age_seconds: ageToSec(pub), url: 'https://www.youtube.com/watch?v=' + id });
   }
   return out;
 }
@@ -89,6 +97,48 @@ export async function searchYoutube(query) {
     headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36', 'Accept-Language': 'en-US,en;q=0.9' } });
   if (!r.ok) throw new Error('YouTube search answered ' + r.status);
   return parseYoutubeSearch(await r.text());
+}
+// ---------- channels (1.1.22): "his latest video" is a CHANNEL question, not a search question ----------
+// FLS: "when I send him a name, I want him to search for the channel, and when he goes into his channel
+// differentiate between shorts, live stream, regular videos — the same as when I go into a YouTube
+// channel." A channel's own tabs are exactly that, and each tab is newest-first, so "the latest" is
+// simply the first entry — no guessing from a mixed search page. The name is all the person gives;
+// the channel is found from the same results page the video search already reads.
+export function parseChannelSearch(html) {
+  const out = [];
+  for (const chunk of String(html || '').split('"channelRenderer":').slice(1)) {
+    if (out.length >= 5) break;
+    const id = /"channelId":"(UC[\w-]{10,})"/.exec(chunk)?.[1];
+    if (!id || out.some(c => c.id === id)) continue;
+    const tm = /"title":\{"simpleText":"((?:[^"\\]|\\.)*)"/.exec(chunk) || /"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/.exec(chunk);
+    const title = tm ? tm[1].replace(/\\u0026/g, '&').replace(/\\"/g, '"').replace(/\\\\/g, '\\') : '';
+    if (!title) continue;
+    out.push({ id, title, url: 'https://www.youtube.com/channel/' + id });
+  }
+  return out;
+}
+export async function searchChannels(query) {
+  const r = await fetch('https://www.youtube.com/results?search_query=' + encodeURIComponent(query), { signal: AbortSignal.timeout(30000),
+    headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36', 'Accept-Language': 'en-US,en;q=0.9' } });
+  if (!r.ok) throw new Error('YouTube search answered ' + r.status);
+  return parseChannelSearch(await r.text());
+}
+/** Which channel tab an ask means: a short → Shorts, a live/stream → Live, anything else → Videos. */
+export function kindForQuery(q) {
+  const s = String(q || '');
+  if (/\b(shorts?|reels?)\b/i.test(s)) return 'short';
+  if (/\b(live|livestream|live stream|stream)\b/i.test(s)) return 'live';
+  return 'video';
+}
+const TAB_FOR_KIND = { video: 'videos', short: 'shorts', live: 'streams' };
+/** The newest entries of one channel tab, in the tab's own order (newest first). */
+async function channelTab(channelUrl, kind, n = 5) {
+  const bin = await ytdlpPath();
+  if (!bin) throw new Error(NO_YTDLP);
+  const { stdout } = await run(bin, ['--js-runtimes', 'node', '--dump-single-json', '--flat-playlist', '--playlist-items', '1:' + n, '--no-warnings', channelUrl + '/' + (TAB_FOR_KIND[kind] || 'videos')], 90000);
+  const j = JSON.parse(stdout || '{}');
+  const entries = Array.isArray(j.entries) ? j.entries.filter(Boolean) : [];
+  return entries.map(e => ({ url: e.id ? 'https://www.youtube.com/watch?v=' + e.id : String(e.url || e.webpage_url || ''), title: e.title || '', live: kind === 'live', short: kind === 'short' })).filter(m => m.url);
 }
 const errLine = (e) => { const s = String(e?.stderr || e?.message || e); const lines = s.split('\n').map(x => x.trim()).filter(x => /error|sign in|unavailable|private|blocked/i.test(x)); return (lines[lines.length - 1] || s.split('\n').filter(Boolean).pop() || 'download failed').replace(/^ERROR:\s*/i, '').slice(0, 220); };
 async function youtubeToFile(target, fmt, dir) {
@@ -152,7 +202,7 @@ async function videoInfo(target) {
   const j = JSON.parse(stdout || '{}');
   const e = Array.isArray(j.entries) ? (j.entries.find(Boolean) || {}) : j;
   return { id: e.id || '', title: e.title || '', by: e.uploader || e.channel || e.artist || '', uploaded: e.upload_date || '',
-    duration_seconds: e.duration ? Math.round(Number(e.duration)) : null, thumb: e.thumbnail || (e.id ? `https://i.ytimg.com/vi/${e.id}/hqdefault.jpg` : ''),
+    duration_seconds: e.duration ? Math.round(Number(e.duration)) : null, live: !!(e.is_live || e.was_live), thumb: e.thumbnail || (e.id ? `https://i.ytimg.com/vi/${e.id}/hqdefault.jpg` : ''),
     url: e.webpage_url || (e.id ? 'https://www.youtube.com/watch?v=' + e.id : target) };
 }
 export const fmtDate = (yyyymmdd) => { const m = /^(\d{4})(\d{2})(\d{2})$/.exec(String(yyyymmdd || '')); if (!m) return ''; try { return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }); } catch { return ''; } };
@@ -171,6 +221,19 @@ export function scoreMatch(query, title) {
   return { score, strong, rank: (strong ? 2 : 0) + score };
 }
 export const durText = (s) => { if (!s) return ''; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`; };
+/** 1.1.22: order YouTube results the way the person meant. A livestream (live now, or a recording of
+ *  one) and a marathon-length video sink below regular videos — UNLESS the ask was for a live/long
+ *  one. Title match (scoreMatch) still decides inside a tier, and for a "latest / newest" ask the
+ *  newest video wins a tie. Nothing is dropped: if everything is a stream, the best stream surfaces. */
+const MARATHON_SEC = 3 * 3600;
+export function rankYoutubeMatches(query, list) {
+  const q = String(query || '');
+  const liveAsk = /\b(live|livestream|live stream|streaming)\b/i.test(q);
+  const longOk = liveAsk || /\b(full|complete|entire|long|marathon|shiur|lecture|class|concert)\b/i.test(q);
+  const latestAsk = /\b(latest|newest|new|recent|last)\b/i.test(q);
+  const penalty = (v) => (liveAsk ? 0 : ((v.live || v.streamed) ? 100 : 0)) + ((!longOk && (v.duration_seconds || 0) > MARATHON_SEC) ? 40 : 0);
+  return [...list].sort((a, b) => (penalty(a) - penalty(b)) || (scoreMatch(q, b.title).rank - scoreMatch(q, a.title).rank) || (latestAsk ? ((a.age_seconds ?? Infinity) - (b.age_seconds ?? Infinity)) : 0));
+}
 /** 1.1.5 (Abish's rule): a VIDEO request searches YouTube; a SONG request searches YouTube Music — unless
  *  the person said otherwise (the model's source argument, or a link, wins over this default). */
 export function defaultSourceFor(query = '', url = '') {
@@ -195,7 +258,7 @@ async function attachThumbnail(ctx, info) {
 const PKEY = (ctx) => 'pending_yt_' + Number(ctx.userId);
 const getPending = (ctx) => { try { const r = dbGet('SELECT v FROM settings WHERE k=?', PKEY(ctx)); return r ? JSON.parse(r.v) : null; } catch { return null; } };
 const setPending = (ctx, p) => { try { if (p) dbRun('INSERT INTO settings(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v', PKEY(ctx), JSON.stringify(p)); else dbRun('DELETE FROM settings WHERE k=?', PKEY(ctx)); } catch {} };
-async function youtubeAudio({ query, url, format, source, confirm, pick }, ctx) {
+async function youtubeAudio({ query, url, format, source, confirm, pick, channel, kind }, ctx) {
   if (!(await ffmpegOk())) return { error: NO_FFMPEG };
   if (!(await ytdlpPath())) return { error: NO_YTDLP };
   const fmt = ['mp3', 'm4a', 'ogg'].includes(String(format || 'mp3').toLowerCase()) ? String(format || 'mp3').toLowerCase() : 'mp3';
@@ -216,16 +279,31 @@ async function youtubeAudio({ query, url, format, source, confirm, pick }, ctx) 
   const want = String(source || '').toLowerCase();
   const music = /music\.youtube\.com/i.test(String(url || '')) || (want ? want === 'music' : defaultSourceFor(query, url) === 'music');   // 1.1.5: video → YouTube, song → YouTube Music, unless told otherwise
   let matches = null, prev = getPending(ctx);
+  let channelUsed = null;
   if (pick) {
     if (!prev || !Array.isArray(prev.matches) || !prev.matches[Number(pick) - 1]) return { error: 'There is no other match number ' + pick + ' waiting. Search again with different words.' };
     matches = prev.matches;
   } else if (url && isYoutubeUrl(url)) { matches = [{ url: String(url), title: '' }]; }
-  else {
-    const q = String(query || url || '').trim();
+  if (!matches && !music && channel && String(channel).trim()) {
+    // 1.1.22: they named a channel → find it, open the tab the ask means (Videos / Shorts / Live),
+    // and take its own order: the first entry IS the newest of that kind. Any failure falls through
+    // to the plain search below — never worse than before.
+    try {
+      const chans = await searchChannels(String(channel).trim());
+      const best = chans.map(c => ({ c, s: scoreMatch(String(channel).trim(), c.title) })).sort((a, b) => b.s.rank - a.s.rank)[0];
+      if (best && best.s.strong) {
+        const k = ['video', 'short', 'live'].includes(String(kind || '').toLowerCase()) ? String(kind).toLowerCase() : kindForQuery(query || channel);
+        const tabMatches = await channelTab(best.c.url, k);
+        if (tabMatches.length) { matches = tabMatches; channelUsed = { title: best.c.title, kind: k }; }
+      }
+    } catch {}
+  }
+  if (!matches) {
+    const q = String(query || url || channel || '').trim();
     if (!q) return { error: 'Tell me what to look for (a name or a few words).' };
     if (music) matches = [{ url: 'https://music.youtube.com/search?q=' + encodeURIComponent(q), title: '' }];
     else {
-      try { const found = await searchYoutube(q); if (found.length) { matches = found.map(v => ({ url: v.url, title: v.title })); matches.sort((a, b) => scoreMatch(q, b.title).rank - scoreMatch(q, a.title).rank); } } catch {}
+      try { const found = await searchYoutube(q); if (found.length) { matches = rankYoutubeMatches(q, found).map(v => ({ url: v.url, title: v.title, live: !!(v.live || v.streamed) })); } } catch {}
       if (!matches) matches = [{ url: 'ytsearch1:' + q, title: '' }];
     }
   }
@@ -239,18 +317,19 @@ async function youtubeAudio({ query, url, format, source, confirm, pick }, ctx) 
   setPending(ctx, { matches, pick: pickIdx, title: info.title, source: music ? 'YouTube Music' : 'YouTube', fmt, ts: Date.now() });
   // 1.1.10: a title whose words don't match the ask IN ORDER is not presented as "the one" — it may be a
   // different person with a similar name. The model must say so and let the person pick from the matches.
-  const uncertain = !pick && !(url && isYoutubeUrl(url)) && !!String(query || '').trim() && !scoreMatch(String(query || ''), info.title).strong;
+  const uncertain = !channelUsed && !pick && !(url && isYoutubeUrl(url)) && !!String(query || '').trim() && !scoreMatch(String(query || ''), info.title).strong;
+  const chosenLive = !!(info.live || chosen.live);
   return { preview: true, title: info.title, by: info.by, released: fmtDate(info.uploaded), duration: durText(info.duration_seconds), duration_seconds: info.duration_seconds,
-    source: music ? 'YouTube Music' : 'YouTube', thumbnail_attached: thumb, ...(uncertain ? { match_uncertain: true } : {}),
-    other_matches: matches.slice(0, 4).map((m, i) => (i + 1) + '. ' + (m.title || '(video)')).filter((_, i) => i !== pickIdx),
-    note: uncertain
+    source: music ? 'YouTube Music' : 'YouTube', thumbnail_attached: thumb, ...(uncertain ? { match_uncertain: true } : {}), ...(chosenLive ? { chosen_is_livestream: true } : {}), ...(channelUsed ? { channel: channelUsed.title, from_channel_tab: channelUsed.kind, note_for_channel: 'This came from the channel\'s own ' + channelUsed.kind + ' tab, newest first — so this IS their newest ' + channelUsed.kind + ' on that channel. Say the channel name when you present it.' } : {}),
+    other_matches: matches.slice(0, 4).map((m, i) => (i + 1) + '. ' + (m.title || '(video)') + (m.live ? ' (livestream)' : '')).filter((_, i) => i !== pickIdx),
+    note: (chosenLive ? 'NOTE: this one is a LIVESTREAM (live now, or a recording of one) — say so plainly when you present it; if they asked for a regular video, offer the non-livestream matches by number. ' : '') + (uncertain
       ? 'STOP — nothing was downloaded, and CAREFUL: this title does NOT closely match what they asked for — their key words are missing or in a different order, so it may be a different person or video with a similar name. Present it honestly: say it is the closest you found and it may NOT be the right one, give its details, and list the other matches by number so they can choose. If they name a number, call youtube_audio with pick:<that number> to preview it; if they say none of them, search again with different words. Download only after they say yes to a specific one.'
-      : 'STOP — nothing was downloaded. The thumbnail picture is attached to your answer. Now tell them: the title, who it is by, the release date and how long it is, and ASK if this is the one they want. When they say yes, call youtube_audio again with confirm:true and the audio will be sent. If they say it is the wrong one, call youtube_audio with pick:2 (or 3…) to show another match, or search again with different words.' };
+      : 'STOP — nothing was downloaded. The thumbnail picture is attached to your answer. Now tell them: the title, who it is by, the release date and how long it is, and ASK if this is the one they want. When they say yes, call youtube_audio again with confirm:true and the audio will be sent. If they say it is the wrong one, call youtube_audio with pick:2 (or 3…) to show another match, or search again with different words.') };
 }
 
 export const MEDIA_TOOLS = [
-  { name: 'youtube_audio', description: 'Find a video on YouTube (or a song on YouTube Music) for a person with NO internet — NEVER answer with a link. It works in two steps: (1) call it with search words or a link: it shows a PREVIEW — the thumbnail picture is attached and you get the title, who made it, the release date and the length; present those and ASK if this is the one they want. (2) Only when they say yes, call it again with confirm:true — then the audio itself is downloaded and sent as voice-note file(s), in full; long ones arrive as several parts, one after another. If they say it is the wrong one, call with pick:2 (etc.) to preview another match, or search with different words.',
-    params: { query: S_('What to find, e.g. "Mordechai Shapiro Yedidim" or "shiur on emunah part 2"'), url: S_('A YouTube or YouTube Music link instead of search words (optional)'), source: S_('Where to search. DEFAULT: a song/music request → "music" (YouTube Music); a video request → "youtube". Set it only to follow what the person asked: "music" when they want a song, "youtube" when they want a video — and the opposite only when they say so explicitly (e.g. "that song, but from regular YouTube")'), format: S_('mp3 (default), m4a or ogg'), confirm: { type: 'boolean', description: 'true ONLY after the person said yes to the preview — downloads and sends the audio' }, pick: { type: 'number', description: 'Preview another match from the last search (2 = second match…)' } },
+  { name: 'youtube_audio', description: 'Find a video on YouTube (or a song on YouTube Music) for a person with NO internet — NEVER answer with a link. It works in two steps: (1) call it with search words or a link: it shows a PREVIEW — the thumbnail picture is attached and you get the title, who made it, the release date and the length; present those and ASK if this is the one they want. (2) Only when they say yes, call it again with confirm:true — then the audio itself is downloaded and sent as voice-note file(s), in full; long ones arrive as several parts, one after another. If they say it is the wrong one, call with pick:2 (etc.) to preview another match, or search with different words. WHEN THEY NAME A CHANNEL OR CREATOR and want their latest/newest (or a short, or a stream) from that channel, pass channel:<the name they gave> and kind: — the tool then opens that channel\'s own tab (Videos / Shorts / Live, newest first), exactly like opening the channel yourself, instead of a mixed search page.',
+    params: { query: S_('What to find, e.g. "Mordechai Shapiro Yedidim" or "shiur on emunah part 2"'), url: S_('A YouTube or YouTube Music link instead of search words (optional)'), channel: S_('The channel/creator name when they ask for something FROM a channel — e.g. "his latest video", "her newest short", "their last stream". Just the name they gave; the tool finds the channel.'), kind: S_('With channel: "short" for a short, "live" for a livestream, "video" (default) for a regular video'), source: S_('Where to search. DEFAULT: a song/music request → "music" (YouTube Music); a video request → "youtube". Set it only to follow what the person asked: "music" when they want a song, "youtube" when they want a video — and the opposite only when they say so explicitly (e.g. "that song, but from regular YouTube")'), format: S_('mp3 (default), m4a or ogg'), confirm: { type: 'boolean', description: 'true ONLY after the person said yes to the preview — downloads and sends the audio' }, pick: { type: 'number', description: 'Preview another match from the last search (2 = second match…)' } },
     run: async (a, ctx) => youtubeAudio(a, ctx) },
   { name: 'extract_audio', description: 'Extract the audio from a video (or convert an audio file) and send the person the audio FILE itself as an attachment to your answer. Give a direct link to the video/audio file (…mp4/.mov/.webm/.mp3), or a YouTube link (for YouTube search words use youtube_audio). format: mp3 (default), m4a or ogg. Use it when they ask for the audio/soundtrack of a video, or to turn a video into audio they can listen to.',
     params: { url: S_('Direct link to the video or audio file'), format: S_('mp3, m4a or ogg (default mp3)'), name: S_('File name to send (optional)') }, required: ['url'],
