@@ -5,8 +5,10 @@
 //     A 206 is now never a whole file (except a single range that IS the whole file); unplaceable
 //     pieces are counted in the diagnosis instead. (2) A failed MP3 conversion silently kept the
 //     original format — now audited as media.audio_unconverted with ffmpeg's reason. (3) When the
-//     hearing key was resting, a deaf key answered the note from the "cannot open it" text — a job
-//     with audio now waits for a hearing key that is only resting (hearingWaitAt).
+//     hearing key was resting, a deaf key answered the note from the "cannot open it" text — 1.1.22
+//     made the job wait for a resting hearing key, and 1.1.23 (after FLS's next note still got the
+//     deaf answer on 1.1.22) narrowed the chain itself: for an audio job only hearing keys are in
+//     it whenever one exists (narrowToHearing), so a deaf key can never answer a voice note.
 // NOTE on order (the v131 lesson): the driver test runs FIRST in this file.
 import { setupEnv, until } from './helpers.js';
 import fs from 'node:fs';
@@ -46,23 +48,23 @@ test('a voice note served only as star-range pieces is NEVER handed to the AI as
   } finally { st.voiceStarRange = false; await app.stop(); }
 });
 
-test('hearingWaitAt: a voice-note job waits only when a hearing key exists and is merely resting', async () => {
+test('narrowToHearing: for a voice note, deaf keys leave the chain whenever a hearing key exists', async () => {
   const db = await import('../src/db.js'); db.openDb();
-  const { hearingWaitAt } = await import('../src/aikeys.js');
-  const t = Date.now();
-  const gemFree = { kind: 'gemini', model: 'gm', cool_until: 0, problem: null, caps: null };
-  const gemRest = { kind: 'gemini', model: 'gm', cool_until: t + 60000, problem: null, caps: null };
-  const gemBroken = { kind: 'gemini', model: 'gm', cool_until: 0, problem: 'model not found', caps: null };
-  const oaDeaf = { kind: 'openai', model: 'om', base_url: 'https://x', cool_until: 0, problem: null, caps: null };
+  const { narrowToHearing, canHear } = await import('../src/aikeys.js');
+  const gem = { id: 1, kind: 'gemini', model: 'gm', cool_until: 0, problem: null, caps: null };
+  const oaDeaf = { id: 2, kind: 'openai', model: 'om', base_url: 'https://x', cool_until: 0, problem: null, caps: null };
   const oaHearCaps = JSON.stringify({ kind: 'openai', model: 'om', base_url: 'https://x', audio: true });
-  const oaHearFree = { kind: 'openai', model: 'om', base_url: 'https://x', cool_until: 0, problem: null, caps: oaHearCaps };
-  const oaHearRest = { kind: 'openai', model: 'om', base_url: 'https://x', cool_until: t + 30000, problem: null, caps: oaHearCaps };
-  assert.equal(hearingWaitAt([gemFree, oaDeaf], t), 0, 'a hearing key is free — no wait');
-  assert.equal(hearingWaitAt([gemRest, oaDeaf], t), t + 60000, 'the hearing key is resting — wait for it, do not let the deaf key answer');
-  assert.equal(hearingWaitAt([oaDeaf], t), 0, 'no hearing key exists at all — proceed as before');
-  assert.equal(hearingWaitAt([gemBroken, oaDeaf], t), 0, 'a broken hearing key is not worth waiting for');
-  assert.equal(hearingWaitAt([gemRest, oaHearRest], t), t + 30000, 'the earliest hearing key sets the wait');
-  assert.equal(hearingWaitAt([gemRest, oaHearFree], t), 0, 'a tested OpenAI key that can hear counts as hearing');
+  const oaHear = { id: 3, kind: 'openai', model: 'om', base_url: 'https://x', cool_until: 0, problem: null, caps: oaHearCaps };
+  const oaDeafTested = { id: 4, kind: 'openai', model: 'om', base_url: 'https://x', cool_until: 0, problem: null, caps: JSON.stringify({ kind: 'openai', model: 'om', base_url: 'https://x', audio: false }) };
+  assert.equal(canHear(gem), true, 'Gemini hears');
+  assert.equal(canHear(oaDeaf), false, 'an untested OpenAI key is not known to hear');
+  assert.equal(canHear(oaHear), true, 'a tested OpenAI key with audio counts');
+  assert.equal(canHear(oaDeafTested), false, 'a tested OpenAI key without audio does not');
+  assert.deepEqual(narrowToHearing([gem, oaDeaf]).map(k => k.id), [1], 'the deaf key is out of the chain');
+  assert.deepEqual(narrowToHearing([oaDeaf, oaHear]).map(k => k.id), [3], 'order among hearing keys is kept');
+  assert.deepEqual(narrowToHearing([gem, oaHear, oaDeafTested]).map(k => k.id), [1, 3], 'every hearing key stays, in order');
+  assert.deepEqual(narrowToHearing([oaDeaf]).map(k => k.id), [2], 'no hearing key anywhere — the chain is unchanged');
+  assert.deepEqual(narrowToHearing([]), [], 'an empty chain stays empty');
 });
 
 test('a voice note that cannot be converted leaves its reason in the Activity log; a real one converts quietly', { timeout: 90000 }, async () => {
