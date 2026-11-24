@@ -863,7 +863,7 @@ export class GoogleMessagesWeb extends EventEmitter {
   async captureByPlaying(idx, cap, note = () => {}) {
     const page = this.page;
     if (!page) return null;
-    let best = null, netSeen = 0, bestOctet = null, octetSeen = 0;
+    let best = null, netSeen = 0, bestOctet = null, octetSeen = 0, fragSeen = 0, fragGot = 0, fragOf = 0;
     // 1.1.19: Google may serve the sound as a generic download (application/octet-stream) — accept those
     // too, but only when the bytes sniff as a known audio format, so unrelated traffic can't slip in.
     const sniffAudio = (buf) => {
@@ -875,15 +875,39 @@ export class GoogleMessagesWeb extends EventEmitter {
       if (s(4, 8) === 'ftyp') return 'audio/mp4';
       return '';
     };
+    const acceptWhole = (buf, ct) => {
+      if (/^(audio|video)\//.test(ct)) { if (!best || buf.length > best.buf.length) best = { buf, mime: ct }; }
+      else if (buf.length >= 512) { const mime = sniffAudio(buf); if (mime && (!bestOctet || buf.length > bestOctet.buf.length)) bestOctet = { buf, mime }; }
+    };
+    // 1.1.20: playback loads the sound in RANGED PIECES (HTTP 206, one Content-Range per response).
+    // 1.1.19 kept the biggest single piece and called it the file — a fragment of an m4a, which Gemini
+    // refused with 'the file or media data is empty, corrupted, or malformed' (FLS's brain.switch line,
+    // 2026-11-23). Pieces are now kept by address and put back together; only a COMPLETE file — a
+    // whole 200, or pieces covering every byte — is ever handed over.
+    const fragSets = new Map();
+    const acceptFrag = (buf, ct, start, total, url) => {
+      fragSeen++;
+      const key = url + '|' + total + '|' + ct;
+      let set = fragSets.get(key);
+      if (!set) { set = { total, parts: [] }; fragSets.set(key, set); }
+      set.parts.push({ start, buf });
+      const whole = Buffer.alloc(total), covered = new Uint8Array(total);
+      for (const p of set.parts) { p.buf.copy(whole, p.start, 0, Math.max(0, Math.min(p.buf.length, total - p.start))); covered.fill(1, p.start, Math.min(total, p.start + p.buf.length)); }
+      let got = 0; for (let i = 0; i < total; i++) got += covered[i];
+      fragOf = total; fragGot = Math.max(fragGot, got);
+      if (got >= total) acceptWhole(whole, ct);
+    };
     const onResp = (resp) => {
       const ct = String(resp.headers()['content-type'] || '').split(';')[0].trim();
-      if (/^(audio|video)\//.test(ct)) {
-        netSeen++;
-        resp.body().then((buf) => { if (buf && buf.length && buf.length <= cap && (!best || buf.length > best.buf.length)) best = { buf, mime: ct }; }).catch(() => {});
-      } else if (ct === 'application/octet-stream' || ct === 'binary/octet-stream') {
-        octetSeen++;
-        resp.body().then((buf) => { if (buf && buf.length >= 512 && buf.length <= cap && (!bestOctet || buf.length > bestOctet.buf.length)) { const mime = sniffAudio(buf); if (mime) bestOctet = { buf, mime }; } }).catch(() => {});
-      }
+      const typed = /^(audio|video)\//.test(ct), octet = ct === 'application/octet-stream' || ct === 'binary/octet-stream';
+      if (!typed && !octet) return;
+      if (typed) netSeen++; else octetSeen++;
+      resp.body().then((buf) => {
+        if (!buf || !buf.length || buf.length > cap) return;
+        const cr = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(String(resp.headers()['content-range'] || ''));
+        if (resp.status() === 206 && cr && Number(cr[3]) > buf.length && Number(cr[3]) <= cap) acceptFrag(buf, ct, Number(cr[1]), Number(cr[3]), resp.url());
+        else acceptWhole(buf, ct);
+      }).catch(() => {});
     };
     page.on('response', onResp);
     const domClick = () => page.evaluate(({ idx, sel }) => {
@@ -963,7 +987,7 @@ export class GoogleMessagesWeb extends EventEmitter {
       await page.keyboard.press('Escape').catch(() => {});
       if (best) { note(`play: captured ${best.buf.length} bytes from the network (${best.mime})`); return { data: best.buf.toString('base64'), mime: best.mime, name: '' }; }
       if (bestOctet) { note(`play: captured ${bestOctet.buf.length} bytes served as a download (${bestOctet.mime})`); return { data: bestOctet.buf.toString('base64'), mime: bestOctet.mime, name: '' }; }
-      note(`play: nothing loaded (media element ${elSeen ? 'appeared but had no loadable address' : 'never appeared'}; ${netSeen} audio/video network responses${octetSeen ? `; ${octetSeen} download-type responses, none of them audio` : ''})`);
+      note(`play: nothing loaded (media element ${elSeen ? 'appeared but had no loadable address' : 'never appeared'}; ${netSeen} audio/video network responses${octetSeen ? `; ${octetSeen} download-type responses, none of them audio` : ''}${fragSeen ? `; the sound arrived only in pieces (${fragGot} of ${fragOf} bytes)` : ''})`);
       return null;
     } finally { page.off('response', onResp); }
   }

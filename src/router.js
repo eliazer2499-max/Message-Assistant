@@ -10,6 +10,7 @@ import { enqueueJob } from './agent.js';
 import { alert } from './alerts.js';
 import { PRODUCT } from './config.js';
 import { handleUserText as siteDecision } from './siteflow.js';
+import { audioToMp3 } from './audioconv.js';
 import * as S from './sites.js';
 
 // 1.1.11: incoming media (a voice note / picture / video / file sent TO the assistant)
@@ -101,11 +102,19 @@ export async function handleIncoming(m) {
     jobMedia = [];
     for (const mm of media.slice(0, 4)) {
       try {
-        const buf = Buffer.from(mm.data, 'base64');
+        let buf = Buffer.from(mm.data, 'base64');
         if (!buf.length || buf.length > 26 * 1024 * 1024) continue;
-        const ext = (mm.name && /\.([\p{L}\d]{1,8})$/u.exec(mm.name)?.[1]) || EXT_OF_MIME[mm.mime] || 'bin';
-        const saved = S.saveMedia(buf, { userId: user.id, ext, name: mm.name || ('attachment.' + ext) });
-        jobMedia.push({ token: saved.token, kind: mm.kind, name: mm.name || 'attachment', mime: mm.mime || '' });
+        let name = mm.name || '', mime = mm.mime || '';
+        // 1.1.20: a voice note is converted to MP3 once, here — the models open mp3 reliably
+        // (Gemini refused an m4a as 'corrupted or malformed'); the original is kept when the
+        // conversion cannot be done.
+        if (mm.kind === 'audio' && mime !== 'audio/mpeg') {
+          const mp3 = await audioToMp3(buf).catch(() => null);
+          if (mp3 && mp3.length) { buf = mp3; mime = 'audio/mpeg'; name = name ? name.replace(/\.[\p{L}\d]{1,8}$/u, '') + '.mp3' : 'voice-note.mp3'; }
+        }
+        const ext = (name && /\.([\p{L}\d]{1,8})$/u.exec(name)?.[1]) || EXT_OF_MIME[mime] || 'bin';
+        const saved = S.saveMedia(buf, { userId: user.id, ext, name: name || ('attachment.' + ext) });
+        jobMedia.push({ token: saved.token, kind: mm.kind, name: name || 'attachment', mime });
       } catch {}
     }
     if (!jobMedia.length) { jobMedia = null; jobText = shownText + couldNotOpen(media[0].kind); }
