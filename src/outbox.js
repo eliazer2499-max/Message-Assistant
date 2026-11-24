@@ -57,7 +57,10 @@ async function drainReactions() {
     try {
       const res = await channel.react({ convId: u.conv_id || null, phone: u.phone && !u.phone.startsWith('conv:') ? u.phone : null, emoji: r.emoji });
       // 1.1.14: no real reaction on that chat (SMS, or it didn't land) → the emoji goes as a tiny text.
-      if (res && res.ok === false) { enqueueText({ userId: r.userId, text: r.emoji, kind: 'reaction' }); log('outbox', `reaction ${r.emoji} for user ${r.userId} went as a text (${res.reason || 'no reaction support'})`); }
+      // 1.1.21: the reason ALSO goes to the dashboard Activity log — it used to live only in the server
+      // logs, which FLS cannot reach (he cannot type in the server console), so why real reactions
+      // never land on his page stayed invisible while every other failure became readable there.
+      if (res && res.ok === false) { enqueueText({ userId: r.userId, text: r.emoji, kind: 'reaction' }); log('outbox', `reaction ${r.emoji} for user ${r.userId} went as a text (${res.reason || 'no reaction support'})`); audit('assistant', 'reaction.as_text', `${r.emoji} for ${u.name || u.phone || ('user ' + r.userId)}: ${res.reason || 'no reaction support'}`); }
       reactionQueue.shift();
     } catch (e) {
       if (e.notConnected) return;                          // Messages is down: try again on the next drain
