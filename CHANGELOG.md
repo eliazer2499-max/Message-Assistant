@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.23 — 2026-11-24
+- **A deaf key can never answer a voice note again.** 1.1.22 made a voice-note job wait when the key that can hear was resting — but a key that fails in the moment is not resting, and the chain still walked past it to a key that cannot hear, which answered "no Gemini key is available" (seen on 1.1.22 the same night). The chain for a voice-note job is now narrowed to keys that can hear whenever one exists: a resting one makes the job wait, a broken one fails the job honestly, and a key that cannot hear is simply never asked. (When no key can hear at all, nothing changes — the note is the only option there is.)
+- **Long videos no longer fail as "too large".** The YouTube download fetched the whole video and pulled the sound out afterwards, so a long video hit the size limit even though its audio was small ("the file is too large for my system to process"). It now downloads the audio-only stream, and the size cap guards that stream.
+
 ## 1.1.22 — 2026-11-24
 - **Channels by name.** When a person names a channel or creator ("his latest video", "her newest short", "their last stream"), the assistant now finds the channel itself and reads its own tabs — Videos, Shorts, Live — newest first, the same as opening the channel in YouTube. The preview names the channel it came from. No handle or link needed, and "the latest" is the tab's first entry, not a guess from a mixed search page.
 - **Livestreams no longer bury regular videos in search.** The results page's own marks (a LIVE badge, a "Streamed …" line, the age, the length) are read now: a livestream or a marathon stream recording sinks below the regular videos, and a "latest" ask picks the newest regular one. A stream still wins when the person actually asked for a live or long one, and a preview that is a livestream says so.
