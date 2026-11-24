@@ -863,12 +863,27 @@ export class GoogleMessagesWeb extends EventEmitter {
   async captureByPlaying(idx, cap, note = () => {}) {
     const page = this.page;
     if (!page) return null;
-    let best = null, netSeen = 0;
+    let best = null, netSeen = 0, bestOctet = null, octetSeen = 0;
+    // 1.1.19: Google may serve the sound as a generic download (application/octet-stream) — accept those
+    // too, but only when the bytes sniff as a known audio format, so unrelated traffic can't slip in.
+    const sniffAudio = (buf) => {
+      const s = (a, b) => buf.slice(a, b).toString('latin1');
+      if (s(0, 5) === '#!AMR') return 'audio/amr';
+      if (s(0, 4) === 'OggS') return 'audio/ogg';
+      if (s(0, 4) === 'RIFF') return 'audio/wav';
+      if (s(0, 3) === 'ID3' || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0)) return 'audio/mpeg';
+      if (s(4, 8) === 'ftyp') return 'audio/mp4';
+      return '';
+    };
     const onResp = (resp) => {
       const ct = String(resp.headers()['content-type'] || '').split(';')[0].trim();
-      if (!/^(audio|video)\//.test(ct)) return;
-      netSeen++;
-      resp.body().then((buf) => { if (buf && buf.length && buf.length <= cap && (!best || buf.length > best.buf.length)) best = { buf, mime: ct }; }).catch(() => {});
+      if (/^(audio|video)\//.test(ct)) {
+        netSeen++;
+        resp.body().then((buf) => { if (buf && buf.length && buf.length <= cap && (!best || buf.length > best.buf.length)) best = { buf, mime: ct }; }).catch(() => {});
+      } else if (ct === 'application/octet-stream' || ct === 'binary/octet-stream') {
+        octetSeen++;
+        resp.body().then((buf) => { if (buf && buf.length >= 512 && buf.length <= cap && (!bestOctet || buf.length > bestOctet.buf.length)) { const mime = sniffAudio(buf); if (mime) bestOctet = { buf, mime }; } }).catch(() => {});
+      }
     };
     page.on('response', onResp);
     const domClick = () => page.evaluate(({ idx, sel }) => {
@@ -879,7 +894,10 @@ export class GoogleMessagesWeb extends EventEmitter {
       const els = qa(w, sel.messageMedia).filter(e => !te || (e !== te && !te.contains(e)));
       const host = els.find(e => ['AUDIO', 'VIDEO'].includes(e.tagName)) || els[0];
       if (!host) return;
-      const btn = (host.matches && host.matches('button, [role="button"]')) ? host : (host.querySelector ? host.querySelector('button, [role="button"], [aria-label*="play" i]') : null);
+      const findBtn = (root) => { if (!root || !root.querySelector) return null; return root.querySelector('button[aria-label*="play" i], [role="button"][aria-label*="play" i]') || root.querySelector('button, [role="button"]'); };
+      let btn = (host.matches && host.matches('button, [role="button"]')) ? host : null;
+      for (let node = host, up = 0; !btn && node && up < 4; up++) { const b = findBtn(node); if (b && b !== host) btn = b; node = node.parentElement; }
+      if (!btn) btn = findBtn(w);
       (btn || host).click();
     }, { idx, sel: this.sel }).catch(() => {});
     try {
@@ -892,18 +910,24 @@ export class GoogleMessagesWeb extends EventEmitter {
         const els = qa(w, sel.messageMedia).filter(e => !te || (e !== te && !te.contains(e)));
         const host = els.find(e => ['AUDIO', 'VIDEO'].includes(e.tagName)) || els[0];
         if (!host) return null;
-        const btn = (host.matches && host.matches('button, [role="button"]')) ? host : (host.querySelector ? host.querySelector('button, [role="button"], [aria-label*="play" i]') : null);
+        // 1.1.19: the play control is usually NOT inside the media element — on the real page it is a
+        // button sitting NEXT TO a src-less <audio> (1.1.18 pressed the <audio> itself; nothing loaded).
+        // Search the containers around the media element, walking up: play-labelled controls first.
+        const findBtn = (root) => { if (!root || !root.querySelector) return null; return root.querySelector('button[aria-label*="play" i], [role="button"][aria-label*="play" i]') || root.querySelector('button, [role="button"]'); };
+        let btn = (host.matches && host.matches('button, [role="button"]')) ? host : null;
+        for (let node = host, up = 0; !btn && node && up < 4; up++) { const b = findBtn(node); if (b && b !== host) btn = b; node = node.parentElement; }
+        if (!btn) btn = findBtn(w);
         const el = btn || host;
         el.scrollIntoView({ block: 'center' });
         const r = el.getBoundingClientRect();
-        return { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height, what: el.tagName + ' "' + (el.getAttribute('aria-label') || '').slice(0, 30) + '"' };
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height, what: el.tagName + ' "' + (el.getAttribute('aria-label') || '').slice(0, 30) + '"', viaBtn: !!btn };
       }, { idx, sel: this.sel }).catch(() => null);
       if (!target) { note('play: no player found in the message'); return null; }
-      note('play: pressing ' + target.what);
+      note('play: pressing ' + target.what + (target.viaBtn ? ' (the play control)' : ' (the media element itself)'));
       if (target.w > 2 && target.h > 2) await page.mouse.click(target.x, target.y).catch(() => {});
       else await domClick();
       const end = Date.now() + 12000;
-      let elSeen = false, domTried = false;
+      let elSeen = false, domTried = false, playTried = false;
       while (Date.now() < end && !best) {
         const got = await page.evaluate(async ({ idx, sel }) => {
           const qa = (root, s) => { try { return [...root.querySelectorAll(s)]; } catch { return []; } };
@@ -926,16 +950,20 @@ export class GoogleMessagesWeb extends EventEmitter {
         }, { idx, sel: this.sel }).catch(() => null);
         if (got && got.data) { note('play: the sound loaded and was fetched whole'); return { data: got.data, mime: String(got.mime || '').split(';')[0].trim(), name: got.srcName || '' }; }
         if (got && got.found) elSeen = true;
+        // a couple of seconds in, also tell the media element to play directly — some players wire the
+        // element itself, and a src the framework attached without an attribute only moves on play()
+        if (!playTried && Date.now() > end - 9600) { playTried = true; await page.evaluate(() => { document.querySelectorAll('audio, video').forEach(m => { try { const p = m.play(); if (p && p.catch) p.catch(() => {}); } catch {} }); }).catch(() => {}); note('play: also told the media element to play directly'); }
         // the mouse press seemingly did nothing after a few seconds: try a DOM click on the control too
         if (!elSeen && !domTried && Date.now() > end - 9000) { domTried = true; note('play: mouse press showed nothing — trying a DOM click'); await domClick(); }
         await sleep(400);
       }
       const stopAt = Date.now() + 1500;
-      while (!best && Date.now() < stopAt) await sleep(150);
+      while (!best && !bestOctet && Date.now() < stopAt) await sleep(150);
       await page.evaluate(() => { document.querySelectorAll('audio, video').forEach(m => { try { if (!m.paused) m.pause(); } catch {} }); }).catch(() => {});
       await page.keyboard.press('Escape').catch(() => {});
       if (best) { note(`play: captured ${best.buf.length} bytes from the network (${best.mime})`); return { data: best.buf.toString('base64'), mime: best.mime, name: '' }; }
-      note(`play: nothing loaded (media element ${elSeen ? 'appeared but had no loadable address' : 'never appeared'}; ${netSeen} audio/video network responses)`);
+      if (bestOctet) { note(`play: captured ${bestOctet.buf.length} bytes served as a download (${bestOctet.mime})`); return { data: bestOctet.buf.toString('base64'), mime: bestOctet.mime, name: '' }; }
+      note(`play: nothing loaded (media element ${elSeen ? 'appeared but had no loadable address' : 'never appeared'}; ${netSeen} audio/video network responses${octetSeen ? `; ${octetSeen} download-type responses, none of them audio` : ''})`);
       return null;
     } finally { page.off('response', onResp); }
   }
