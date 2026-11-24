@@ -144,8 +144,12 @@ const errLine = (e) => { const s = String(e?.stderr || e?.message || e); const l
 async function youtubeToFile(target, fmt, dir) {
   const bin = await ytdlpPath();
   if (!bin) throw Object.assign(new Error(NO_YTDLP), { noYtdlp: true });
+  // 1.1.23: only the AUDIO is ever wanted, so download the audio-only stream — fetching the whole
+  // video first made long videos die on the size cap ("the file is too large for my system to
+  // process", FLS's screenshot, 2026-11-24) when it was the VIDEO that was large, not the sound.
+  // The cap now guards the audio stream itself, with room for hours of it.
   await run(bin, ['--js-runtimes', 'node', '--playlist-items', '1', '--no-progress', '--no-warnings', '--socket-timeout', '30', '--retries', '2',
-    '-x', '--audio-format', fmt, '--audio-quality', '2', '--max-filesize', '200M', '-o', path.join(dir, 'audio.%(ext)s'), target], 300000);
+    '-f', 'bestaudio/best', '-x', '--audio-format', fmt, '--audio-quality', '2', '--max-filesize', '600M', '-o', path.join(dir, 'audio.%(ext)s'), target], 300000);
   const f = fs.readdirSync(dir).map(n => path.join(dir, n)).find(p => /\.(mp3|m4a|ogg|opus)$/i.test(p) && fs.statSync(p).size > 0);
   if (!f) throw new Error('YouTube did not give an audio file for that video.');
   return f;

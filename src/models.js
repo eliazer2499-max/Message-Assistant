@@ -403,21 +403,21 @@ export async function callModel(args, opts = {}) {
   }
   const withMedia = heavyMedia(args.items || []);
   const use = opts.use && aikeys.USES.includes(opts.use) ? opts.use : null;
-  const keys = aikeys.usableKeys({ withMedia, use, mediaKinds: mediaKindsOf(args.items || []), userId: Number(opts.userId) || 0 });   // 1.1.4: this person's own keys first, when they have any
+  let keys = aikeys.usableKeys({ withMedia, use, mediaKinds: mediaKindsOf(args.items || []), userId: Number(opts.userId) || 0 });   // 1.1.4: this person's own keys first, when they have any
   if (!keys.length) {
     const any = aikeys.listRows().length;
     const e = userError(any ? 'All AI keys are switched off (or have no key saved). Open the dashboard → AI keys and switch one on.'
       : 'No AI key yet. Open the dashboard → AI keys → Add key (a free Gemini key comes from aistudio.google.com/apikey).');
     e.noKeys = true; throw e;
   }
-  // 1.1.22: a voice note answered by a key that cannot hear is a note that goes unread — and it only
-  // happened SOMETIMES: whenever the hearing key was resting, the chain walked past it to a deaf key,
-  // which answered from the "cannot open it" note. If a hearing key exists and is only resting, wait
-  // for it (the agent turns allResting into a queue wait, exactly like every key resting).
+  // 1.1.23: a voice note answered by a key that cannot hear is a note that goes unread. The chain for
+  // an audio job is narrowed to hearing keys whenever one exists (see aikeys.narrowToHearing): a
+  // resting hearing key then makes the job wait via the all-resting path at the bottom, a broken one
+  // fails the job honestly — and a deaf key never answers a voice note at all.
   if (mediaKindsOf(args.items || []).includes('audio')) {
     const rowsNow = keys.map(k => aikeys.keyRow(k.id)).filter(Boolean);
-    const waitAt = aikeys.hearingWaitAt(rowsNow, now());
-    if (waitAt) { const e = userError('Every key that can hear a voice note is resting right now.'); e.allResting = true; e.retryAt = waitAt; throw e; }
+    const narrowed = aikeys.narrowToHearing(rowsNow);
+    if (narrowed.length < rowsNow.length) { const keep = new Set(narrowed.map(k => k.id)); keys = keys.filter(k => keep.has(k.id)); }
   }
   const reasons = new Map();            // key id → why it was not used, for the final message
   const retryable = new Set();          // ids that failed in a way a short wait may fix

@@ -172,17 +172,15 @@ export function cannotTake(r, mediaKinds = []) {
 /** 1.1.22: can this key HEAR a voice note? Gemini takes audio directly; an OpenAI-style key only when
  *  its Test showed audio works (an untested one is sent the note as text instead — see models.js). */
 export const canHear = (r) => !!r && (r.kind === 'gemini' || freshCaps(r)?.audio === true);
-/** For a voice-note job: if no key that can hear is free but one is only RESTING, the job should wait
- *  for it rather than let a deaf key answer "can't open it" (FLS: "it doesn't always read voice notes,
- *  only sometimes" — the sometimes was exactly when the hearing key was resting). Returns the moment
- *  the first hearing key wakes, or 0 for "do not wait" (a hearing key is free, or none exists, or the
- *  hearing keys are broken rather than resting). */
-export function hearingWaitAt(rows, t) {
+/** 1.1.23: the key chain for a voice-note job, narrowed to keys that can HEAR whenever one exists —
+ *  a deaf key must never be the one that "answers" a voice note. (1.1.22 only waited when the hearing
+ *  key was resting, but a key that fails AT call time is not resting, and the chain still walked past
+ *  it to a deaf key — FLS's next note got "no Gemini key is available" on 1.1.22.) With the chain
+ *  narrowed, a resting hearing key makes the job wait through the ordinary all-resting path, and a
+ *  broken one fails the job honestly. No hearing key at all → the chain is returned unchanged. */
+export function narrowToHearing(rows) {
   const hearing = (rows || []).filter(canHear);
-  if (!hearing.length) return 0;
-  if (hearing.some(r => !(r.cool_until > t) && r.problem !== 'model not found')) return 0;
-  const at = hearing.map(r => r.cool_until).filter(x => x > t);
-  return at.length ? Math.min(...at) : 0;
+  return hearing.length ? hearing : (rows || []);
 }
 
 /** Carry the 2.2 settings over (runs on start and before every use; each part runs once). */
